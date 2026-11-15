@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://ghostyshell.github.io/browser-bridge/"><img alt="Website" src="https://img.shields.io/badge/Website-6d8bff?style=for-the-badge&logo=googlechrome&logoColor=white"></a>
   <a href="https://discord.gg/bUadyRwkJS"><img alt="Discord" src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <a href="https://ko-fi.com/ghosty99"><img alt="Ko-fi" src="https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
   <a href="https://etherscan.io/address/0xbBef115aD853236a350EaF04777a2AdB2e7c0317"><img alt="ETH" src="https://img.shields.io/badge/ETH-627EEA?style=for-the-badge&logo=ethereum&logoColor=white"></a>

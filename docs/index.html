@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser Bridge - let a CLI agent drive your own Chrome</title>
+<meta name="description" content="A Chromium extension and a loopback daemon that let Claude Code, opencode or any shell-capable agent drive your real browser: tab group, numbered snapshots, click, type, scroll, screenshot.">
+<meta name="theme-color" content="#04060c">
+<link rel="canonical" href="https://ghostyshell.github.io/browser-bridge/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Browser Bridge">
+<meta property="og:title" content="Browser Bridge">
+<meta property="og:description" content="Your own Chrome, driven by a terminal agent. Real profile, real logins, a tab group you can watch and undo.">
+<meta property="og:url" content="https://ghostyshell.github.io/browser-bridge/">
+<meta property="og:image" content="https://ghostyshell.github.io/browser-bridge/icon.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://ghostyshell.github.io/browser-bridge/icon.png">
+<link rel="icon" href="icon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #04060c;
+    --ink: #e9eefc;
+    --muted: #98a6c0;
+    --line: rgba(255, 255, 255, .09);
+    --accent: #a78bfa;
+    --font: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.65 var(--font);
+         -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: inherit; }
+  .bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5;
+          mix-blend-mode: screen; will-change: transform; }
+  .b1 { width: 52vw; height: 52vw; top: -18vw; left: -10vw;
+        background: radial-gradient(circle, var(--accent) 0%, transparent 66%);
+        animation: drift1 30s ease-in-out infinite alternate; }
+  .b2 { width: 40vw; height: 40vw; bottom: -14vw; right: -12vw; opacity: .34;
+        background: radial-gradient(circle, #22d3ee 0%, transparent 68%);
+        animation: drift2 26s ease-in-out infinite alternate; }
+  @keyframes drift1 { to { transform: translate3d(7vw, 6vh, 0) scale(1.18); } }
+  @keyframes drift2 { to { transform: translate3d(-6vw, -8vh, 0) scale(1.12); } }
+  .mesh { position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 68px 68px;
+    -webkit-mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 5%, transparent 70%);
+    mask-image: radial-gradient(ellipse 90% 55% at 50% 0%, #000 5%, transparent 70%); }
+
+  .wrap { position: relative; z-index: 1; max-width: 64rem; margin: 0 auto; padding: 0 1.5rem 4rem; }
+  nav { position: sticky; top: 1rem; z-index: 20; display: flex; align-items: center;
+        justify-content: space-between; gap: 1rem; margin-top: 1rem; padding: .5rem .6rem .5rem .9rem;
+        border-radius: 999px; background: rgba(10,15,27,.55); border: 1px solid var(--line);
+        -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+        box-shadow: 0 1px 0 rgba(255,255,255,.07) inset, 0 18px 40px -28px #000; }
+  .brand { display: flex; align-items: center; gap: .6rem; text-decoration: none; font-weight: 600; }
+  .brand img { width: 26px; height: 26px; border-radius: 7px;
+               box-shadow: 0 0 16px color-mix(in oklab, var(--accent) 55%, transparent); }
+  .navlinks { display: flex; gap: .25rem; }
+  .navlinks a { text-decoration: none; font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
+                text-transform: uppercase; color: var(--muted); padding: .45rem .8rem; border-radius: 999px;
+                transition: color .25s, background .25s; }
+  .navlinks a:hover, .navlinks a:focus-visible { color: #fff; background: rgba(255,255,255,.07); outline: none; }
+
+  .hero { padding: 4.5rem 0 1rem; text-align: center; }
+  .hero img { width: 92px; height: 92px; border-radius: 22px; display: block; margin: 0 auto 1.6rem;
+              box-shadow: 0 24px 60px -24px color-mix(in oklab, var(--accent) 90%, transparent),
+                          0 0 0 1px rgba(255,255,255,.08) inset; }
+  h1 { margin: 0 auto 1.1rem; max-width: 22ch; font-size: clamp(2.1rem, 5.4vw, 3.5rem); line-height: 1.04;
+       letter-spacing: -.035em; font-weight: 700; }
+  h1 span { background: linear-gradient(100deg, #c4b5fd, var(--accent) 55%, #67e8f9);
+            -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { margin: 0 auto 1.6rem; max-width: 40rem; color: var(--muted); font-size: 1.05rem; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; margin: 0 0 1.8rem; padding: 0; list-style: none; }
+  .chips li { font-family: var(--mono); font-size: .68rem; letter-spacing: .09em; text-transform: uppercase;
+              color: #b9c7de; border: 1px solid var(--line); background: rgba(255,255,255,.04);
+              padding: .35rem .7rem; border-radius: 999px; }
+  .cta { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; }
+  .btn { display: inline-flex; align-items: center; gap: .45rem; text-decoration: none; font-family: var(--mono);
+         font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; padding: .78rem 1.25rem;
+         border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: #e6ecf9;
+         transition: transform .25s, background .25s, border-color .25s, box-shadow .25s; }
+  .btn:hover, .btn:focus-visible { transform: translateY(-2px); outline: none;
+    border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+    background: color-mix(in oklab, var(--accent) 16%, transparent); }
+  .btn.solid { background: linear-gradient(100deg, color-mix(in oklab, var(--accent) 30%, transparent), rgba(34,211,238,.16));
+               border-color: color-mix(in oklab, var(--accent) 55%, transparent); color: #fff; }
+
+  h2.sec { margin: 4.5rem 0 1.2rem; font-family: var(--mono); font-size: .74rem; font-weight: 500;
+           letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+  ul.feats { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem;
+             grid-template-columns: repeat(auto-fit, minmax(min(100%, 18.5rem), 1fr)); }
+  ul.feats li { padding: 1.35rem; border-radius: 18px; border: 1px solid var(--line);
+                background: linear-gradient(158deg, rgba(255,255,255,.075), rgba(255,255,255,.02) 60%, rgba(255,255,255,.04));
+                -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+                box-shadow: 0 1px 0 rgba(255,255,255,.07) inset, 0 20px 40px -32px #000;
+                transition: transform .4s cubic-bezier(.2,.7,.2,1), border-color .4s, box-shadow .4s; }
+  ul.feats li:hover { transform: translateY(-4px); border-color: color-mix(in oklab, var(--accent) 40%, transparent);
+                      box-shadow: 0 26px 50px -32px color-mix(in oklab, var(--accent) 65%, transparent); }
+  ul.feats h3 { margin: 0 0 .45rem; font-size: 1rem; letter-spacing: -.01em; }
+  ul.feats p { margin: 0; color: #a9b8ce; font-size: .92rem; }
+
+  ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: 1.1rem; }
+  ol.steps > li { counter-increment: s; position: relative; padding-left: 2.9rem; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: .1rem; width: 2rem; height: 2rem;
+    display: grid; place-items: center; border-radius: 50%; font-family: var(--mono); font-size: .8rem;
+    color: #e7dcff; background: color-mix(in oklab, var(--accent) 18%, transparent);
+    border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent); }
+  ol.steps h3 { margin: .25rem 0 .4rem; font-size: 1rem; }
+  ol.steps p { margin: 0 0 .6rem; color: #a9b8ce; font-size: .94rem; }
+  pre { margin: 0; padding: .85rem 1rem; border-radius: 12px; border: 1px solid var(--line);
+        background: rgba(6,10,18,.72); font-family: var(--mono); font-size: .82rem; color: #c7d6ee;
+        overflow-x: auto; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  p code, li code { font-family: var(--mono); background: rgba(255,255,255,.07); padding: .1rem .35rem; white-space: nowrap;
+                    border-radius: 5px; color: #dbe6f8; font-size: .88em; }
+  .flow { margin: 1.4rem 0 0; padding: 1.1rem 1.2rem; border-radius: 14px; border: 1px solid var(--line);
+          background: rgba(6,10,18,.6); font-family: var(--mono); font-size: .78rem; line-height: 1.9;
+          color: #9fb0cc; overflow-x: auto; }
+  .flow b { color: #e6ecf9; font-weight: 500; }
+
+  footer.site { margin-top: 4.5rem; padding-top: 1.6rem; border-top: 1px solid var(--line);
+                display: flex; flex-wrap: wrap; gap: .8rem; justify-content: space-between;
+                font-family: var(--mono); font-size: .74rem; color: #7d8aa1; }
+  footer.site a { color: #a9b8ce; text-decoration: none; border-bottom: 1px solid transparent; }
+  footer.site a:hover, footer.site a:focus-visible { color: #fff; border-bottom-color: currentColor; outline: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .blob { animation: none !important; }
+    ul.feats li:hover, .btn:hover { transform: none; }
+  }
+  @media (max-width: 34rem) {
+    .hero { padding: 3rem 0 .5rem; }
+    nav { top: .5rem; margin-top: .5rem; }
+    .navlinks a { padding: .4rem .55rem; font-size: .64rem; }
+  }
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true">
+  <span class="blob b1"></span>
+  <span class="blob b2"></span>
+  <div class="mesh"></div>
+</div>
+
+<div class="wrap">
+  <nav aria-label="Main">
+    <a class="brand" href="./"><img src="icon.png" width="26" height="26" alt=""> Browser Bridge</a>
+    <div class="navlinks">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/ghostyshell/browser-bridge">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <img src="icon.png" width="92" height="92" alt="Browser Bridge icon">
+    <h1>Your own Chrome, driven by a <span>terminal agent</span>.</h1>
+    <p class="lede">A Chromium extension and a loopback daemon. Claude Code, opencode, or anything that can run a shell command gets a real browser with your profile and your logins, one tab group at a time.</p>
+    <ul class="chips">
+      <li>TypeScript</li>
+      <li>MIT</li>
+      <li>Chromium browsers</li>
+      <li>Loopback only</li>
+    </ul>
+    <div class="cta">
+      <a class="btn solid" href="#install">Install it</a>
+      <a class="btn" href="https://github.com/ghostyshell/browser-bridge">Source</a>
+    </div>
+  </header>
+
+  <main>
+    <h2 class="sec" id="features">What it does</h2>
+    <ul class="feats">
+      <li>
+        <h3>Your real profile</h3>
+        <p>Chromium 136 and later refuse <code>--remote-debugging-port</code> on your default profile, so the DevTools protocol cannot reach the browser you actually use. An extension runs inside that profile with your sessions instead.</p>
+      </li>
+      <li>
+        <h3>Its own tab group</h3>
+        <p>The agent only touches tabs it opened or adopted, kept in a group you can see. Close the group and the whole session is gone.</p>
+      </li>
+      <li>
+        <h3>Numbered snapshots</h3>
+        <p><code>chromectl snapshot</code> turns the page into numbered elements. Click by number, type into a field, scroll, wait for a selector, run JS, take a screenshot.</p>
+      </li>
+      <li>
+        <h3>Nothing on the network</h3>
+        <p>The daemon binds <code>127.0.0.1</code> and the extension connects to it over a websocket. A ping every 20 seconds keeps the MV3 worker alive; nothing is exposed to your LAN.</p>
+      </li>
+      <li>
+        <h3>Any agent, one command</h3>
+        <p>The agent just runs <code>chromectl ...</code> in a shell, so no vendor's chat sidebar sits in the middle and any harness can drive it.</p>
+      </li>
+      <li>
+        <h3>Background by default</h3>
+        <p>Opening a page does not steal focus. Tabs land in the Agent group while you keep working in your own.</p>
+      </li>
+    </ul>
+
+    <h2 class="sec" id="install">Install</h2>
+    <ol class="steps">
+      <li>
+        <h3>Run the installer</h3>
+        <p>It installs dependencies, compiles the TypeScript, links <code>chromectl</code> into <code>~/.local/bin</code>, links the skill for Claude Code and opencode, and starts the daemon.</p>
+        <pre>git clone https://github.com/ghostyshell/browser-bridge.git
+cd browser-bridge
+./install.sh</pre>
+      </li>
+      <li>
+        <h3>Load the extension once</h3>
+        <p>Open <code>chrome://extensions</code>, turn on Developer mode, choose Load unpacked and select the <code>extension</code> folder, then pin it. The badge turns into a purple dot when the agent connects.</p>
+      </li>
+      <li>
+        <h3>Drive it</h3>
+        <pre>chromectl open https://example.com
+chromectl snapshot
+chromectl click 12
+chromectl type 3 "hello" --submit
+chromectl screenshot</pre>
+      </li>
+    </ol>
+
+    <div class="flow" aria-label="How the pieces connect">
+      <b>agent</b> (you, Claude Code, opencode)<br>
+      &nbsp;&nbsp;│&nbsp; chromectl snapshot | click | type ...<br>
+      &nbsp;&nbsp;▼<br>
+      <b>daemon</b>&nbsp; 127.0.0.1:8737&nbsp; ·&nbsp; ~/.config/browser-bridge/<br>
+      &nbsp;&nbsp;│&nbsp; websocket, ping every 20s keeps the MV3 worker alive<br>
+      &nbsp;&nbsp;▼<br>
+      <b>extension</b> inside your profile: your logins, your session<br>
+      &nbsp;&nbsp;│<br>
+      &nbsp;&nbsp;▼<br>
+      <b>tab group "Agent"</b>: only the tabs the agent opened or adopted
+    </div>
+  </main>
+
+  <footer class="site">
+    <span>MIT · Source on <a href="https://github.com/ghostyshell/browser-bridge">GitHub</a> · <a href="https://github.com/ghostyshell/browser-bridge#readme">Full command reference</a></span>
+    <span><a href="https://ghostyshell.github.io/">More GhostShell projects</a></span>
+  </footer>
+</div>
+</body>
+</html>
