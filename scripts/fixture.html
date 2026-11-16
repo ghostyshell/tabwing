@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bridge fixture</title>
+    <title>Tabwing fixture</title>
     <style>
       body {
         font: 15px/1.5 -apple-system, system-ui, sans-serif;
@@ -50,8 +50,8 @@
     </style>
   </head>
   <body>
-    <h1>Bridge fixture</h1>
-    <p id="intro">A tiny local page for smoke-testing the Browser Bridge.</p>
+    <h1>Tabwing fixture</h1>
+    <p id="intro">A tiny local page for smoke-testing the Tabwing.</p>
     <a href="/page2.html" id="next">Go to page two</a>
 
     <form id="form">
@@ -76,6 +76,16 @@
     <button id="counter">Clicked 0</button>
     <p><a href="/page2.html" id="popout" target="_blank" rel="opener">Open page two in a new tab</a></p>
 
+    <button id="confirm">Delete draft</button>
+    <div id="confirmed" role="status"></div>
+    <button id="prompt">Ask for a name</button>
+    <div id="prompted" role="status"></div>
+    <button id="guard">Guard this page</button>
+
+    <!-- tall content: --full screenshots must reach past the viewport -->
+    <div style="height: 2400px"></div>
+    <p id="tail">End of the fixture</p>
+
     <script>
       const form = document.getElementById('form');
       const result = document.getElementById('result');
@@ -99,6 +109,21 @@
           d.textContent = 'Surprise appeared';
           document.body.append(d);
         }, 900);
+      });
+      document.getElementById('confirm').addEventListener('click', () => {
+        const ok = window.confirm('Delete the draft?');
+        document.getElementById('confirmed').textContent = ok ? 'deleted' : 'kept';
+      });
+      document.getElementById('prompt').addEventListener('click', () => {
+        const name = window.prompt('Name?', 'Ada');
+        document.getElementById('prompted').textContent = name === null ? '(cancelled)' : name;
+      });
+      document.getElementById('guard').addEventListener('click', () => {
+        window.onbeforeunload = (e) => {
+          e.preventDefault();
+          e.returnValue = '';
+        };
+        document.getElementById('tail').textContent = 'Guarded: navigation asks first';
       });
     </script>
   </body>

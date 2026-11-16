@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch a throwaway Chrome profile with Browser Bridge loaded, for testing.
+# Launch a throwaway Chrome profile with Tabwing loaded, for testing.
 # Usage: scripts/dev-chrome.sh [url ...]
 #
 # Uses a temp profile so it never touches the real browser. The extension is
@@ -7,8 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROFILE="${BRIDGE_TEST_PROFILE:-${TMPDIR:-/tmp}/browser-bridge-profile}"
-PORT="${BRIDGE_TEST_CDP_PORT:-9333}"
+PROFILE="${TABWING_TEST_PROFILE:-${TMPDIR:-/tmp}/tabwing-profile}"
+PORT="${TABWING_TEST_CDP_PORT:-9333}"
 CHROME="${CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 
 mkdir -p "$PROFILE"

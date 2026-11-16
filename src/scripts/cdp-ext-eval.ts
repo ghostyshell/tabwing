@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Evaluate an expression inside the Browser Bridge service worker over CDP.
+// Evaluate an expression inside the Tabwing service worker over CDP.
 // Used by smoke-test.sh to simulate the user pressing "Allow" in the popup.
 //
 //   node dist/scripts/cdp-ext-eval.js <extension-dir> <cdp-port> "<expression>"

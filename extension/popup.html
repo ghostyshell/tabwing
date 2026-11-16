@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Browser Bridge</title>
+    <title>Tabwing</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body class="popup">
     <header class="head">
       <div class="brand">
-        <span class="mark" aria-hidden="true"></span>
+        <img class="mark" src="icons/icon32.png" alt="">
         <div>
-          <h1>Browser Bridge</h1>
+          <h1>Tabwing</h1>
           <p id="subtitle">checking status…</p>
         </div>
       </div>
@@ -63,14 +63,14 @@
     <section id="help" class="card" hidden>
       <h2>How it works</h2>
       <p class="muted help-body">
-        Your agent runs <code>chromectl</code> in a terminal. Every action lands in the purple
+        Your agent runs <code>chromectl</code> in a terminal. Every action lands in the orange
         <strong>Agent</strong> tab group, so you can watch it work and close it any time.
         New sites need your approval here first.
       </p>
       <ul class="help-list">
         <li><code>chromectl status</code> <span class="muted">connection, tabs, permissions</span></li>
         <li><code>chromectl daemon stop</code> <span class="muted">hard stop, nothing can run</span></li>
-        <li><code>~/.config/browser-bridge/daemon.log</code></li>
+        <li><code>~/.config/tabwing/daemon.log</code></li>
       </ul>
     </section>
 

@@ -1,8 +1,8 @@
 /** Payloads shared by the CLI, the daemon and the extension. */
 
-export type Result<T> = { ok: true; result: T; ms?: number } | { ok: false; error: BridgeFailure; ms?: number };
+export type Result<T> = { ok: true; result: T; ms?: number } | { ok: false; error: TabwingFailure; ms?: number };
 
-export interface BridgeFailure {
+export interface TabwingFailure {
   code: string;
   message: string;
 }
@@ -90,6 +90,8 @@ export interface ExtensionInfo {
   version: string;
   ua: string;
   extensionId: string;
+  /** Per-profile id: tells two browsers that loaded the same folder apart. */
+  clientId?: string;
   since: number;
 }
 

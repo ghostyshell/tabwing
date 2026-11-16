@@ -1,7 +1,7 @@
 /**
- * Browser Bridge - MV3 service worker.
+ * Tabwing - MV3 service worker.
  *
- * Opens a WebSocket to the local bridge daemon (127.0.0.1:8737), receives
+ * Opens a WebSocket to the local Tabwing daemon (127.0.0.1:8737), receives
  * commands from the CLI on behalf of an AI agent, executes them via the
  * chrome.* APIs + an injected content script, and returns results.
  *
@@ -20,11 +20,11 @@ import type {
   TabDescriptor,
 } from '../shared/types';
 
-const VERSION = '1.5.19';
+const VERSION = '2.0.0';
 const PORT = 8737;
 const WS_URL = `ws://127.0.0.1:${PORT}/ws`;
 const GROUP_TITLE = 'Agent';
-const GROUP_COLOR = 'purple' as chrome.tabGroups.ColorEnum & string;
+const GROUP_COLOR = 'orange' as chrome.tabGroups.ColorEnum & string;
 
 let socket: WebSocket | null = null;
 let connected = false;
@@ -34,7 +34,20 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-class BridgeError extends Error {
+/**
+ * A per-profile id for this install. Unpacked extensions get their id from the
+ * folder, so the user's browser and a throwaway test browser report the same
+ * chrome.runtime.id; the daemon needs this to tell two connections apart.
+ */
+async function clientId(): Promise<string> {
+  const { bbClientId } = (await chrome.storage.local.get('bbClientId')) as { bbClientId?: unknown };
+  if (typeof bbClientId === 'string' && bbClientId) return bbClientId;
+  const id = crypto.randomUUID();
+  await chrome.storage.local.set({ bbClientId: id });
+  return id;
+}
+
+class TabwingError extends Error {
   code: string;
 
   constructor(code: string, message: string) {
@@ -43,7 +56,7 @@ class BridgeError extends Error {
   }
 }
 
-const fail = (code: string, message: string): BridgeError => new BridgeError(code, message);
+const fail = (code: string, message: string): TabwingError => new TabwingError(code, message);
 
 type ActionParams = PageParams & {
   tabId?: number;
@@ -57,6 +70,9 @@ type ActionParams = PageParams & {
   delayMs?: number;
   method?: string;
   params?: string;
+  action?: string;
+  promptText?: string;
+  full?: boolean;
 };
 
 type Method = (params: ActionParams) => Promise<unknown>;
@@ -129,7 +145,7 @@ async function requireOrigin(url: string | undefined, { tabId = null }: { tabId?
   await paintBadge();
   throw fail(
     'origin_not_allowed',
-    `Permission required for ${origin}. Ask the user to open the Browser Bridge extension icon and press "Allow" for this site, then retry.`,
+    `Permission required for ${origin}. Ask the user to open the Tabwing extension icon and press "Allow" for this site, then retry.`,
   );
 }
 
@@ -156,7 +172,7 @@ async function saveGroups(groups: GroupMap): Promise<void> {
 
 /**
  * Last-resort recovery: if we lost our ids (fresh install, cleared storage)
- * but a purple group named "Agent" still exists, adopt it again instead of
+ * but an orange group named "Agent" still exists, adopt it again instead of
  * leaving the user with an orphaned group.
  */
 async function recoverGroups(): Promise<GroupMap> {
@@ -486,7 +502,10 @@ async function callPage<T>(tab: chrome.tabs.Tab, action: PageAction, params: Act
 /* ------------------------------------------------------------------ */
 
 const cdpAttached = new Map<number, ReturnType<typeof setTimeout>>();
+const cdpAttaching = new Map<number, Promise<void>>();
 const CDP_IDLE_MS = 20_000;
+/** An attach that never settles would wedge every later command on that tab. */
+const ATTACH_TIMEOUT_MS = 10_000;
 
 async function cdpDetach(tabId: number): Promise<void> {
   const timer = cdpAttached.get(tabId);
@@ -510,23 +529,43 @@ function cdpTouch(tabId: number): void {
  * attach. It changes nothing the user sees and never raises the window.
  */
 async function cdpSession(tabId: number): Promise<void> {
-  // The map alone is not proof: Chrome detaches on its own (devtools opened on
-  // the tab, renderer restart) and a stale entry then wedges every later
-  // command on that tab until the timeout.
-  if (cdpAttached.has(tabId) && (await debuggerAttached(tabId))) {
-    cdpTouch(tabId);
-    return;
-  }
-  cdpAttached.delete(tabId);
-  await chrome.debugger.attach({ tabId }, '1.3');
-  await chrome.debugger.sendCommand({ tabId }, 'Page.enable').catch(() => undefined);
+  // Two commands arriving together must share one attach: the second
+  // chrome.debugger.attach throws "Another debugger is already attached", and
+  // the recovery (detach + attach) kills the session the first one is using.
+  const pending = cdpAttaching.get(tabId);
+  if (pending) return pending;
+  const attach = Promise.race([
+    (async () => {
+      // The map alone is not proof: Chrome detaches on its own (devtools opened
+      // on the tab, renderer restart) and a stale entry then wedges every later
+      // command on that tab until the timeout.
+      if (cdpAttached.has(tabId) && (await debuggerAttached(tabId))) {
+        cdpTouch(tabId);
+        return;
+      }
+      // A stale timer would fire later and detach the fresh session.
+      const stale = cdpAttached.get(tabId);
+      if (stale) clearTimeout(stale);
+      cdpAttached.delete(tabId);
+      await chrome.debugger.attach({ tabId }, '1.3');
+      await chrome.debugger.sendCommand({ tabId }, 'Page.enable').catch(() => undefined);
+      await emulateFocused(tabId);
+      cdpTouch(tabId);
+    })(),
+    sleep(ATTACH_TIMEOUT_MS).then(() => Promise.reject(new Error('debugger attach timed out'))),
+  ]).finally(() => cdpAttaching.delete(tabId));
+  cdpAttaching.set(tabId, attach);
+  return attach;
+}
+
+/** Keep a hidden tab rendering and accepting input as if focused. */
+async function emulateFocused(tabId: number): Promise<void> {
   await chrome.debugger
     .sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true })
     .catch(() => undefined);
   await chrome.debugger
     .sendCommand({ tabId }, 'Page.setWebLifecycleState', { state: 'active' })
     .catch(() => undefined);
-  cdpTouch(tabId);
 }
 
 /**
@@ -580,6 +619,97 @@ chrome.debugger.onDetach.addListener((source) => {
     const timer = cdpAttached.get(source.tabId);
     if (timer) clearTimeout(timer);
     cdpAttached.delete(source.tabId);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* javascript dialogs                                                  */
+/* ------------------------------------------------------------------ */
+
+interface DialogReport {
+  tabId: number;
+  type: string;
+  message: string;
+  handled: 'accepted' | 'dismissed';
+  promptText?: string;
+  at: number;
+}
+
+/**
+ * A dialog is answered the moment it opens, the way Playwright and Puppeteer
+ * behave by default: alert/confirm/prompt are dismissed, and a beforeunload
+ * prompt is accepted so navigation proceeds. A dialog in a background tab is
+ * invisible to the user, and while it is open every CDP command blocks until
+ * the CLI gives up, so leaving it for a human is not an option. An armed policy
+ * (`chromectl dialog accept`) wins once, for flows that need the OK.
+ */
+const dialogPolicy = new Map<number, { accept: boolean; promptText?: string; at: number; origin: string }>();
+/** An armed answer lapses, so a dialog much later is never accepted by accident. */
+const DIALOG_POLICY_MS = 60_000;
+const dialogReports: DialogReport[] = [];
+
+function dialogNote(d: DialogReport): string {
+  const what = `${d.type}("${d.message}")`;
+  if (d.type === 'beforeunload') {
+    return d.handled === 'accepted'
+      ? 'Accepted a beforeunload prompt so the navigation could continue.'
+      : 'Dismissed a beforeunload prompt, so the page stayed. Arm "chromectl dialog accept" to leave next time.';
+  }
+  if (d.handled === 'accepted') return `Accepted a ${what}${d.promptText ? ` with "${d.promptText}"` : ''}.`;
+  return `A ${what} opened and was dismissed. If this action needed it accepted, run "chromectl dialog accept" first, then repeat the action.`;
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source.tabId;
+  if (tabId == null) return;
+
+  if (method === 'Page.javascriptDialogOpening') {
+    const p = (params || {}) as { type?: string; message?: string; url?: string };
+    const armedRaw = dialogPolicy.get(tabId);
+    dialogPolicy.delete(tabId);
+    // The arm only applies to the origin it was set on, and only while fresh.
+    const armed =
+      armedRaw && Date.now() - armedRaw.at < DIALOG_POLICY_MS && originOf(p.url || '') === armedRaw.origin
+        ? armedRaw
+        : undefined;
+    // Accept/dismiss on a beforeunload is inverted from every other dialog:
+    // accept means "leave", dismiss means "stay". Default to leaving, or a page
+    // with a beforeunload handler would silently refuse every navigation.
+    const accept = armed ? armed.accept : p.type === 'beforeunload';
+    const report: DialogReport = {
+      tabId,
+      type: p.type || 'dialog',
+      // Page text can carry control characters; keep them out of the terminal.
+      message: (p.message || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' '),
+      handled: accept ? 'accepted' : 'dismissed',
+      ...(accept && armed?.promptText != null ? { promptText: String(armed.promptText) } : {}),
+      at: Date.now(),
+    };
+    dialogReports.push(report);
+    if (dialogReports.length > 20) dialogReports.shift();
+    const answer: Record<string, unknown> = { accept };
+    if (accept && armed?.promptText != null) answer.promptText = String(armed.promptText);
+    void chrome.debugger.sendCommand({ tabId }, 'Page.handleJavaScriptDialog', answer).catch(() => undefined);
+    return;
+  }
+
+  // A navigation builds a fresh document and can come back throttled, so the
+  // focus state the session promised is re-asserted on the new one. An armed
+  // dialog answer does not survive into a different document.
+  if (method === 'Page.frameNavigated') {
+    const frame = (params as { frame?: { parentId?: string } } | undefined)?.frame;
+    if (frame && !frame.parentId) {
+      dialogPolicy.delete(tabId);
+      if (cdpAttached.has(tabId)) void emulateFocused(tabId);
+    }
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  dialogPolicy.delete(tabId);
+  cdpAttaching.delete(tabId);
+  for (let i = dialogReports.length - 1; i >= 0; i -= 1) {
+    if (dialogReports[i]!.tabId === tabId) dialogReports.splice(i, 1);
   }
 });
 
@@ -877,13 +1007,32 @@ async function cdpUpload(tabId: number, p: ActionParams): Promise<Record<string,
   return { uploaded: p.file, viaCdp: true };
 }
 
-async function cdpScreenshot(tabId: number): Promise<string> {
-  const res = (await cdp(tabId, 'Page.captureScreenshot', {
-    format: 'png',
-    captureBeyondViewport: false,
-  })) as { data?: string } | undefined;
-  if (!res?.data) throw new Error('no screenshot data');
-  return `data:image/png;base64,${res.data}`;
+/**
+ * CDP screenshot. A hidden or minimized window can refuse a surface capture
+ * ("screenshot is not available"), so the retry renders the view instead
+ * (`fromSurface: false`), which never raises the tab. `full` captures past the
+ * viewport to the end of the page.
+ */
+async function cdpScreenshot(tabId: number, full = false): Promise<string> {
+  const attempts: Array<Record<string, unknown>> = full
+    ? [
+        { format: 'png', captureBeyondViewport: true },
+        { format: 'png', captureBeyondViewport: true, fromSurface: false },
+      ]
+    : [
+        { format: 'png', captureBeyondViewport: false },
+        { format: 'png', captureBeyondViewport: false, fromSurface: false },
+      ];
+  let lastError: unknown = new Error('no screenshot data');
+  for (const params of attempts) {
+    try {
+      const res = (await cdp(tabId, 'Page.captureScreenshot', params)) as { data?: string } | undefined;
+      if (res?.data) return `data:image/png;base64,${res.data}`;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('no screenshot data');
 }
 
 /* ------------------------------------------------------------------ */
@@ -1240,19 +1389,24 @@ const methods: Record<string, Method> = {
       // extension") right after a navigation on some sites; a clean detach and
       // a beat later it takes. Two tries, then fall back to injection.
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        let res: Awaited<ReturnType<typeof run>>;
         try {
-          const res = await run();
-          if (res.exceptionDetails)
-            throw new Error(
-              [res.exceptionDetails.text, res.exceptionDetails.exception?.description].filter(Boolean).join(' | ') ||
-                'evaluation failed',
-            );
-          return { value: res.result?.value, world: 'page' };
+          res = await run();
         } catch (e) {
+          // Only a session failure gets a detach and a second try; an exception
+          // thrown by the expression itself is a normal result.
           (p as ActionParams & { cdpError?: string }).cdpError = String(e);
           await cdpDetach(tab.id!);
           await sleep(250);
+          continue;
         }
+        if (res.exceptionDetails) {
+          throw new Error(
+            [res.exceptionDetails.text, res.exceptionDetails.exception?.description].filter(Boolean).join(' | ') ||
+              'evaluation failed',
+          );
+        }
+        return { value: res.result?.value, world: 'page' };
       }
     }
     await ensureInjected(tab.id!);
@@ -1322,6 +1476,31 @@ const methods: Record<string, Method> = {
     return cdpUpload(tab.id!, p);
   },
 
+  /** Inspect, or arm the answer for, the next JavaScript dialog on a tab. */
+  async 'page.dialog'(p: ActionParams = {}) {
+    const tab = await resolveTab(p, { page: false });
+    const action = String(p.action || 'status');
+    if (action === 'status') {
+      const armed = dialogPolicy.get(tab.id!);
+      const fresh = armed && Date.now() - armed.at < DIALOG_POLICY_MS ? armed : null;
+      if (armed && !fresh) dialogPolicy.delete(tab.id!);
+      const last = [...dialogReports].reverse().find((d) => d.tabId === tab.id) ?? null;
+      return { armed: fresh, last };
+    }
+    if (action !== 'accept' && action !== 'dismiss') {
+      throw fail('bad_request', 'page.dialog needs action: status, accept or dismiss');
+    }
+    await assertAllowed(tab);
+    // A dialog is only visible to the extension while a debugger session is
+    // attached, so arming one keeps the session warm.
+    await cdpSession(tab.id!).catch(() => undefined);
+    const accept = action === 'accept';
+    const promptText = accept && p.promptText != null ? String(p.promptText) : undefined;
+    const origin = originOf(tab.url || tab.pendingUrl || '') || '';
+    dialogPolicy.set(tab.id!, { accept, at: Date.now(), origin, ...(promptText != null ? { promptText } : {}) });
+    return { armed: { accept, promptText: promptText ?? null, origin }, tabId: tab.id };
+  },
+
   async 'page.screenshot'(p: ActionParams = {}) {
     const tab = await resolveTab(p, { page: false });
     await assertAllowed(tab);
@@ -1339,17 +1518,18 @@ const methods: Record<string, Method> = {
     // active, so there we borrow it and hand it straight back.
     try {
       const dataUrl = await Promise.race([
-        cdpScreenshot(tab.id!),
+        cdpScreenshot(tab.id!, p.full === true),
         sleep(8000).then(() => Promise.reject(new Error('cdp screenshot timed out'))),
       ]);
-      return { dataUrl, url: tab.url, title: tab.title, ...(meta as object) };
+      return { dataUrl, url: tab.url, title: tab.title, full: p.full === true, ...(meta as object) };
     } catch {
       const [previous] = await chrome.tabs.query({ windowId: tab.windowId, active: true });
       const borrowed = previous?.id !== tab.id;
       if (borrowed) await showTab(tab.id!);
       try {
         const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-        return { dataUrl, url: tab.url, title: tab.title, borrowed, ...(meta as object) };
+        // This path is always the viewport: say so when the whole page was asked for.
+        return { dataUrl, url: tab.url, title: tab.title, borrowed, full: false, ...(meta as object) };
       } finally {
         if (borrowed && previous?.id != null) await showTab(previous.id).catch(() => undefined);
       }
@@ -1391,14 +1571,14 @@ async function paintBadge(): Promise<void> {
     if (pendingOrigin) {
       await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' });
       await chrome.action.setBadgeText({ text: '!' });
-      await chrome.action.setTitle({ title: `Browser Bridge - ${pendingOrigin.origin} is waiting for permission` });
+      await chrome.action.setTitle({ title: `Tabwing - ${pendingOrigin.origin} is waiting for permission` });
     } else if (connected) {
-      await chrome.action.setBadgeBackgroundColor({ color: '#6d28d9' });
+      await chrome.action.setBadgeBackgroundColor({ color: '#d97706' });
       await chrome.action.setBadgeText({ text: '•' });
-      await chrome.action.setTitle({ title: 'Browser Bridge - connected' });
+      await chrome.action.setTitle({ title: 'Tabwing - connected' });
     } else {
       await chrome.action.setBadgeText({ text: '' });
-      await chrome.action.setTitle({ title: 'Browser Bridge - daemon not running' });
+      await chrome.action.setTitle({ title: 'Tabwing - daemon not running' });
     }
   } catch {
     /* badge is cosmetic */
@@ -1423,7 +1603,17 @@ function connect(): void {
   socket.onopen = () => {
     connected = true;
     backoffMs = 700;
-    send({ type: 'hello', version: VERSION, ua: navigator.userAgent, extensionId: chrome.runtime.id });
+    void clientId()
+      .catch(() => '')
+      .then((client) =>
+        send({
+          type: 'hello',
+          version: VERSION,
+          ua: navigator.userAgent,
+          extensionId: chrome.runtime.id,
+          ...(client ? { clientId: client } : {}),
+        }),
+      );
     void paintBadge();
   };
   socket.onmessage = (ev: MessageEvent<string>) => {
@@ -1465,9 +1655,20 @@ async function handleCommand({ id, method, params }: { id: string; method: strin
     const fn = methods[method];
     if (!fn) throw fail('unknown_method', `Unknown method "${method}"`);
     const result = await fn(params || {});
-    send({ type: 'result', id, ok: true, result, ms: Date.now() - started });
+    // Dialogs handled while this command ran are part of what happened, and the
+    // agent has to know: the page state it reads was decided by those answers.
+    const dialogs = dialogReports.filter((d) => d.at >= started);
+    const out =
+      dialogs.length && result && typeof result === 'object' && !Array.isArray(result)
+        ? {
+            ...(result as object),
+            dialogs,
+            note: [(result as { note?: string }).note, dialogs.map(dialogNote).join(' ')].filter(Boolean).join(' '),
+          }
+        : result;
+    send({ type: 'result', id, ok: true, result: out, ms: Date.now() - started });
   } catch (e) {
-    const err = e as BridgeError;
+    const err = e as TabwingError;
     send({
       type: 'result',
       id,

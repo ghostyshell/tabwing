@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Browser Bridge - let a CLI agent drive your own Chrome</title>
+<title>Tabwing - let a CLI agent drive your own Chrome</title>
 <meta name="description" content="A Chromium extension and a loopback daemon that let Claude Code, opencode or any shell-capable agent drive your real browser: tab group, numbered snapshots, click, type, scroll, screenshot.">
 <meta name="theme-color" content="#04060c">
-<link rel="canonical" href="https://ghostyshell.github.io/browser-bridge/">
+<link rel="canonical" href="https://ghostyshell.github.io/tabwing/">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Browser Bridge">
-<meta property="og:title" content="Browser Bridge">
+<meta property="og:site_name" content="Tabwing">
+<meta property="og:title" content="Tabwing">
 <meta property="og:description" content="Your own Chrome, driven by a terminal agent. Real profile, real logins, a tab group you can watch and undo.">
-<meta property="og:url" content="https://ghostyshell.github.io/browser-bridge/">
-<meta property="og:image" content="https://ghostyshell.github.io/browser-bridge/icon.png">
+<meta property="og:url" content="https://ghostyshell.github.io/tabwing/">
+<meta property="og:image" content="https://ghostyshell.github.io/tabwing/icon.png">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:image" content="https://ghostyshell.github.io/browser-bridge/icon.png">
+<meta name="twitter:image" content="https://ghostyshell.github.io/tabwing/icon.png">
 <link rel="icon" href="icon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -28,7 +28,7 @@
     --ink: #e9eefc;
     --muted: #98a6c0;
     --line: rgba(255, 255, 255, .09);
-    --accent: #a78bfa;
+    --accent: #e3a83c;
     --font: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
@@ -44,7 +44,7 @@
         background: radial-gradient(circle, var(--accent) 0%, transparent 66%);
         animation: drift1 30s ease-in-out infinite alternate; }
   .b2 { width: 40vw; height: 40vw; bottom: -14vw; right: -12vw; opacity: .34;
-        background: radial-gradient(circle, #22d3ee 0%, transparent 68%);
+        background: radial-gradient(circle, #7c9a92 0%, transparent 68%);
         animation: drift2 26s ease-in-out infinite alternate; }
   @keyframes drift1 { to { transform: translate3d(7vw, 6vh, 0) scale(1.18); } }
   @keyframes drift2 { to { transform: translate3d(-6vw, -8vh, 0) scale(1.12); } }
@@ -76,7 +76,7 @@
                           0 0 0 1px rgba(255,255,255,.08) inset; }
   h1 { margin: 0 auto 1.1rem; max-width: 22ch; font-size: clamp(2.1rem, 5.4vw, 3.5rem); line-height: 1.04;
        letter-spacing: -.035em; font-weight: 700; }
-  h1 span { background: linear-gradient(100deg, #c4b5fd, var(--accent) 55%, #67e8f9);
+  h1 span { background: linear-gradient(100deg, #f6e7c1, var(--accent) 55%, #c9782e);
             -webkit-background-clip: text; background-clip: text; color: transparent; }
   .lede { margin: 0 auto 1.6rem; max-width: 40rem; color: var(--muted); font-size: 1.05rem; }
   .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; margin: 0 0 1.8rem; padding: 0; list-style: none; }
@@ -153,18 +153,18 @@
 
 <div class="wrap">
   <nav aria-label="Main">
-    <a class="brand" href="./"><img src="icon.png" width="26" height="26" alt=""> Browser Bridge</a>
+    <a class="brand" href="./"><img src="icon.png" width="26" height="26" alt=""> Tabwing</a>
     <div class="navlinks">
       <a href="#features">Features</a>
       <a href="#install">Install</a>
-      <a href="https://github.com/ghostyshell/browser-bridge">GitHub</a>
+      <a href="https://github.com/ghostyshell/tabwing">GitHub</a>
     </div>
   </nav>
 
   <header class="hero">
-    <img src="icon.png" width="92" height="92" alt="Browser Bridge icon">
+    <img src="icon.png" width="92" height="92" alt="Tabwing icon">
     <h1>Your own Chrome, driven by a <span>terminal agent</span>.</h1>
-    <p class="lede">A Chromium extension and a loopback daemon. Claude Code, opencode, or anything that can run a shell command gets a real browser with your profile and your logins, one tab group at a time.</p>
+    <p class="lede">A Chromium extension and a loopback daemon. Claude Code, opencode, or anything that can run a shell command gets a real browser with your profile and your logins, working offstage in its own tab group. The name is the idea: the agent waits in the wings, and you keep the stage.</p>
     <ul class="chips">
       <li>TypeScript</li>
       <li>MIT</li>
@@ -173,7 +173,7 @@
     </ul>
     <div class="cta">
       <a class="btn solid" href="#install">Install it</a>
-      <a class="btn" href="https://github.com/ghostyshell/browser-bridge">Source</a>
+      <a class="btn" href="https://github.com/ghostyshell/tabwing">Source</a>
     </div>
   </header>
 
@@ -211,13 +211,13 @@
       <li>
         <h3>Run the installer</h3>
         <p>It installs dependencies, compiles the TypeScript, links <code>chromectl</code> into <code>~/.local/bin</code>, links the skill for Claude Code and opencode, and starts the daemon.</p>
-        <pre>git clone https://github.com/ghostyshell/browser-bridge.git
-cd browser-bridge
+        <pre>git clone https://github.com/ghostyshell/tabwing.git
+cd tabwing
 ./install.sh</pre>
       </li>
       <li>
         <h3>Load the extension once</h3>
-        <p>Open <code>chrome://extensions</code>, turn on Developer mode, choose Load unpacked and select the <code>extension</code> folder, then pin it. The badge turns into a purple dot when the agent connects.</p>
+        <p>Open <code>chrome://extensions</code>, turn on Developer mode, choose Load unpacked and select the <code>extension</code> folder, then pin it. The badge turns into an amber dot when the agent connects.</p>
       </li>
       <li>
         <h3>Drive it</h3>
@@ -233,7 +233,7 @@ chromectl screenshot</pre>
       <b>agent</b> (you, Claude Code, opencode)<br>
       &nbsp;&nbsp;│&nbsp; chromectl snapshot | click | type ...<br>
       &nbsp;&nbsp;▼<br>
-      <b>daemon</b>&nbsp; 127.0.0.1:8737&nbsp; ·&nbsp; ~/.config/browser-bridge/<br>
+      <b>daemon</b>&nbsp; 127.0.0.1:8737&nbsp; ·&nbsp; ~/.config/tabwing/<br>
       &nbsp;&nbsp;│&nbsp; websocket, ping every 20s keeps the MV3 worker alive<br>
       &nbsp;&nbsp;▼<br>
       <b>extension</b> inside your profile: your logins, your session<br>
@@ -244,7 +244,7 @@ chromectl screenshot</pre>
   </main>
 
   <footer class="site">
-    <span>MIT · Source on <a href="https://github.com/ghostyshell/browser-bridge">GitHub</a> · <a href="https://github.com/ghostyshell/browser-bridge#readme">Full command reference</a></span>
+    <span>MIT · Source on <a href="https://github.com/ghostyshell/tabwing">GitHub</a> · <a href="https://github.com/ghostyshell/tabwing#readme">Full command reference</a></span>
     <span><a href="https://ghostyshell.github.io/">More GhostShell projects</a></span>
   </footer>
 </div>

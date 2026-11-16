@@ -3,8 +3,8 @@
   --fg: #18181b;
   --muted: #71717a;
   --line: #e4e4e7;
-  --violet: #6d28d9;
-  --violet-soft: #f4efff;
+  --accent: #b45309;
+  --accent-soft: #fdf3dc;
   --amber: #c2410c;
   --amber-soft: #fff5eb;
   --radius: 12px;
@@ -57,18 +57,8 @@ body:not(.popup) {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: radial-gradient(circle at 30% 25%, #8b5cf6, #5b21b6);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
   flex: none;
-  position: relative;
-}
-
-.mark::after {
-  content: '';
-  position: absolute;
-  inset: 7px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.9);
+  display: block;
 }
 
 h1 {
@@ -226,8 +216,8 @@ input[type='text'] {
 }
 
 input[type='text']:focus {
-  outline: 2px solid var(--violet-soft);
-  border-color: var(--violet);
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
 }
 
 button {
@@ -247,8 +237,8 @@ button:hover {
 }
 
 button.primary {
-  background: var(--violet);
-  border-color: var(--violet);
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
   font-weight: 600;
 }
@@ -281,7 +271,7 @@ button.x:hover {
 button.linky {
   border: none;
   background: none;
-  color: var(--violet);
+  color: var(--accent);
   padding: 0;
   font-size: 11.5px;
 }
@@ -324,7 +314,7 @@ button.linky {
 }
 
 .switch input:checked + .track {
-  background: var(--violet);
+  background: var(--accent);
 }
 
 .switch input:checked + .track .knob {
@@ -332,7 +322,7 @@ button.linky {
 }
 
 .switch input:focus-visible + .track {
-  outline: 2px solid var(--violet-soft);
+  outline: 2px solid var(--accent-soft);
   outline-offset: 2px;
 }
 

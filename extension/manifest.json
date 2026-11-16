@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Browser Bridge",
-  "version": "1.5.19",
-  "description": "Lets a local AI agent drive your real browser inside a dedicated tab group, with per-site permission.",
+  "name": "Tabwing",
+  "version": "2.0.0",
+  "description": "Your own Chrome for a terminal agent: an offstage tab group, real logins, per-site permission.",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",
@@ -13,13 +13,16 @@
     "activeTab",
     "debugger"
   ],
-  "host_permissions": ["<all_urls>", "chrome-extension://*/*"],
+  "host_permissions": [
+    "<all_urls>",
+    "chrome-extension://*/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Browser Bridge",
+    "default_title": "Tabwing",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

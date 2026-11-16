@@ -14,5 +14,5 @@ if (!fs.existsSync(built)) {
   process.exit(1);
 }
 
-process.env.BB_ROOT = root;
+process.env.TABWING_ROOT = root;
 require(built);

@@ -5,9 +5,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CDP_PORT="${BRIDGE_TEST_CDP_PORT:-9333}"
-FIXTURE_PORT="${BRIDGE_FIXTURE_PORT:-8899}"
-PROFILE="${BRIDGE_TEST_PROFILE:-${TMPDIR:-/tmp}/browser-bridge-profile}"
+CDP_PORT="${TABWING_TEST_CDP_PORT:-9333}"
+FIXTURE_PORT="${TABWING_FIXTURE_PORT:-8899}"
+PROFILE="${TABWING_TEST_PROFILE:-${TMPDIR:-/tmp}/tabwing-profile}"
 CTL="$ROOT/bin/chromectl"
 ORIGIN="http://127.0.0.1:$FIXTURE_PORT"
 PASS=0
@@ -49,15 +49,23 @@ say "2. daemon + throwaway Chrome"
 # keeps an unpacked MV3 service worker cached until the extension is reloaded),
 # so the port is cleared and the default profile rebuilt from scratch every run.
 pkill -f "remote-debugging-port=${CDP_PORT}" 2>/dev/null && sleep 1
-[ -z "${BRIDGE_TEST_PROFILE:-}" ] && rm -rf "$PROFILE"
-BRIDGE_TEST_PROFILE="$PROFILE" "$ROOT/scripts/dev-chrome.sh" >/dev/null || { say "could not launch test Chrome"; exit 1; }
+[ -z "${TABWING_TEST_PROFILE:-}" ] && rm -rf "$PROFILE"
+TABWING_TEST_PROFILE="$PROFILE" "$ROOT/scripts/dev-chrome.sh" >/dev/null || { say "could not launch test Chrome"; exit 1; }
 sleep 2
 check "extension connected" '"extensionConnected":true' "$(curl -s http://127.0.0.1:8737/health)"
 # The real browser reconnects faster than the throwaway one starts, and the
 # daemon answers to the first client that said hello: pin the test profile so
 # nothing below ever touches the user's browser.
-TEST_EXT="$(node "$ROOT/dist/scripts/cdp-ext-eval.js" "$ROOT/extension" "$CDP_PORT" "chrome.runtime.id")"
-TOKEN="$(cat "$HOME/.config/browser-bridge/token")"
+# The id comes from the folder, so the user's browser reports the same one. The
+# per-profile clientId is what actually names the throwaway browser. Read it
+# with a bounded retry: the worker writes it on its first connect.
+TEST_CLIENT=""
+for _ in $(seq 1 20); do
+  TEST_CLIENT="$(node "$ROOT/dist/scripts/cdp-ext-eval.js" "$ROOT/extension" "$CDP_PORT" "chrome.storage.local.get('bbClientId').then(v=>v.bbClientId||'')")"
+  [ -n "$TEST_CLIENT" ] && break
+  sleep 0.25
+done
+TOKEN="$(cat "$HOME/.config/tabwing/token")"
 NONCE="http://smoke-$$-$RANDOM.invalid"
 # The pin lapses if the throwaway browser's socket drops (its worker restarts),
 # and then the daemon falls back to the real browser: re-pin and re-prove it
@@ -65,8 +73,8 @@ NONCE="http://smoke-$$-$RANDOM.invalid"
 # the test browser's storage (over CDP, so it cannot go anywhere else) that must
 # come back through chromectl.
 assert_test_browser() {
-  PIN="$(curl -s -X POST -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8737/pin?extensionId=$TEST_EXT")"
-  check "test browser pinned ($1)" "\"extensionId\":\"$TEST_EXT\"" "$PIN"
+  PIN="$(curl -s -X POST -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8737/pin?clientId=$TEST_CLIENT")"
+  check "test browser pinned ($1)" "\"clientId\":\"$TEST_CLIENT\"" "$PIN"
   node "$ROOT/dist/scripts/cdp-ext-eval.js" "$ROOT/extension" "$CDP_PORT" \
     "chrome.storage.local.get('allowedOrigins').then(v=>chrome.storage.local.set({allowedOrigins:[...new Set([...(v.allowedOrigins||[]),'$NONCE'])]})).then(()=>'set')" >/dev/null
   STATUS="$("$CTL" status 2>&1)"
@@ -90,7 +98,7 @@ assert_test_browser "before reset"
 OUT="$("$CTL" open "$ORIGIN/fixture.html" 2>&1)"
 check "tab opened in group" "opened tab" "$OUT"
 OUT="$("$CTL" snapshot --no-text)"
-check "snapshot finds heading" 'heading1 "Bridge fixture"' "$OUT"
+check "snapshot finds heading" 'heading1 "Tabwing fixture"' "$OUT"
 check "snapshot finds textbox" 'textbox "Your name"' "$OUT"
 check "refs are numbered" '[0] heading1' "$OUT"
 
@@ -111,6 +119,7 @@ check "repeated clicks" "Clicked 2" "$("$CTL" eval "document.getElementById('cou
 OUT="$("$CTL" screenshot 2>&1)"
 SHOT="$(printf '%s\n' "$OUT" | head -1)"
 check "screenshot written" ".png" "$SHOT"
+NORM_H="$(printf '%s\n' "$OUT" | sed -n '2p' | sed -E 's/^[0-9]+x([0-9]+).*/\1/')"
 if [ -f "$SHOT" ]; then
   say "  ok    screenshot file exists"
   PASS=$((PASS + 1))
@@ -129,7 +138,53 @@ else
   say "  FAIL  background-tab screenshot did not change after the page did ($SHOT vs $SHOT2)"
   FAIL=$((FAIL + 1))
 fi
-check "screenshot did not borrow the tab" "" "$(printf '%s\n' "$OUT" | grep -c borrowed | sed 's/^0$//')"
+check "screenshot did not borrow the tab" "" "$(printf '%s\n' "$OUT" | grep -c 'brought to front' | sed 's/^0$//')"
+
+say "4b. full-page screenshot"
+OUT="$("$CTL" screenshot --full 2>&1)"
+FULL_H="$(printf '%s\n' "$OUT" | sed -n '2p' | sed -E 's/^[0-9]+x([0-9]+).*/\1/')"
+if [ -n "$FULL_H" ] && [ -n "$NORM_H" ] && [ "$FULL_H" -gt "$NORM_H" ]; then
+  say "  ok    --full reaches past the viewport (${FULL_H}px vs ${NORM_H}px)"
+  PASS=$((PASS + 1))
+else
+  say "  FAIL  --full did not capture the whole page (full=${FULL_H:-?} viewport=${NORM_H:-?})"
+  FAIL=$((FAIL + 1))
+fi
+check "full screenshot did not borrow the tab" "" "$(printf '%s\n' "$OUT" | grep -c 'brought to front' | sed 's/^0$//')"
+
+say "4c. javascript dialogs in a background tab"
+OUT="$("$CTL" click css=#confirm 2>&1)"
+check "confirm() dismissed by default" "dismissed" "$OUT"
+check "dismissed confirm() returned false" "kept" "$("$CTL" eval "document.getElementById('confirmed').textContent")"
+"$CTL" dialog accept >/dev/null
+OUT="$("$CTL" click css=#confirm 2>&1)"
+check "armed dialog accepted" "Accepted a confirm" "$OUT"
+check "accepted confirm() returned true" "deleted" "$("$CTL" eval "document.getElementById('confirmed').textContent")"
+check "dialog state is inspectable" "last:" "$("$CTL" dialog status)"
+"$CTL" dialog accept "Ada Lovelace" >/dev/null
+OUT="$("$CTL" click css=#prompt 2>&1)"
+check "prompt() answered with the armed text" "Ada Lovelace" "$("$CTL" eval "document.getElementById('prompted').textContent")"
+check "prompt() reported" "Accepted a prompt" "$OUT"
+
+say "4d. concurrent commands share one debugger attach"
+# A brand new tab has no session yet, so all three commands race into the attach.
+OPEN_OUT="$("$CTL" open "$ORIGIN/page2.html" 2>&1)"
+NEWTAB="$(printf '%s\n' "$OPEN_OUT" | sed -n 's/^opened tab \([0-9][0-9]*\).*/\1/p')"
+for n in 1 2 3; do "$CTL" key Tab --tab "$NEWTAB" >"$TMPDIR/bb-concurrent-$n.out" 2>&1 & PIDS[$n]=$!; done
+wait "${PIDS[1]}" "${PIDS[2]}" "${PIDS[3]}"
+CONCURRENT_FAIL=0
+# page.key falls back to the content script on any CDP error; "(cdp)" proves
+# every one of the three got a working debugger session.
+for n in 1 2 3; do grep -q "sent Tab (cdp)" "$TMPDIR/bb-concurrent-$n.out" || CONCURRENT_FAIL=1; done
+rm -f "$TMPDIR"/bb-concurrent-*.out
+"$CTL" close --tab "$NEWTAB" >/dev/null 2>&1
+if [ "$CONCURRENT_FAIL" -eq 0 ]; then
+  say "  ok    three parallel commands shared one attach and all used CDP"
+  PASS=$((PASS + 1))
+else
+  say "  FAIL  a parallel command lost the debugger attach race"
+  FAIL=$((FAIL + 1))
+fi
 
 say "5. the user keeps their tab"
 ACTIVE="$(node "$ROOT/dist/scripts/cdp-ext-eval.js" "$ROOT/extension" "$CDP_PORT" "chrome.tabs.query({active:true}).then(t=>t.map(x=>x.url).join())")"
@@ -147,6 +202,13 @@ say "6. navigation + ref expiry"
 "$CTL" wait url=/page2.html --timeout 5000 >/dev/null
 sleep 0.5
 check "navigated to page two" 'heading1 "Page two"' "$("$CTL" snapshot --no-text)"
+
+say "6b. beforeunload does not block navigation"
+"$CTL" goto "$ORIGIN/fixture.html" >/dev/null
+"$CTL" click css=#guard >/dev/null
+OUT="$("$CTL" goto "$ORIGIN/page2.html" --json 2>&1)"
+check "navigation proceeded past beforeunload" "page2.html" "$OUT"
+check "beforeunload dialog was reported" '"type": "beforeunload"' "$OUT"
 
 say "7. group lifecycle"
 assert_test_browser "before final reset"

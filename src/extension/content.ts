@@ -1,5 +1,5 @@
 /**
- * Browser Bridge - page agent (isolated world content script).
+ * Tabwing - page agent (isolated world content script).
  *
  * Injected on demand by the service worker. Exposes a tiny RPC surface:
  *   snapshot / click / type / key / scroll / hover / select / wait / find /

@@ -1,8 +1,8 @@
 {
-  "name": "browser-bridge",
-  "version": "1.5.19",
+  "name": "tabwing",
+  "version": "2.0.0",
   "private": true,
-  "description": "Drive your real Chrome from any CLI agent: parked tab group, numbered snapshots, click/type/scroll/screenshot over localhost.",
+  "description": "Your own Chrome, driven from the wings: a background tab group for any CLI agent, with per-site permission.",
   "license": "MIT",
   "author": "ghost",
   "type": "commonjs",

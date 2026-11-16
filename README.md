@@ -1,12 +1,12 @@
-<h1 align="center">Browser Bridge</h1>
+<h1 align="center">Tabwing</h1>
 
 <p align="center">
-  <b>Your own Chrome, driven by a terminal agent.</b><br>
+  <b>Your own Chrome, driven from the wings.</b><br>
   Real profile, real logins, a tab group you can watch and undo.
 </p>
 
 <p align="center">
-  <a href="https://ghostyshell.github.io/browser-bridge/"><img alt="Website" src="https://img.shields.io/badge/Website-6d8bff?style=for-the-badge&logo=googlechrome&logoColor=white"></a>
+  <a href="https://ghostyshell.github.io/tabwing/"><img alt="Website" src="https://img.shields.io/badge/Website-6d8bff?style=for-the-badge&logo=googlechrome&logoColor=white"></a>
   <a href="https://discord.gg/bUadyRwkJS"><img alt="Discord" src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <a href="https://ko-fi.com/ghosty99"><img alt="Ko-fi" src="https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
   <a href="https://etherscan.io/address/0xbBef115aD853236a350EaF04777a2AdB2e7c0317"><img alt="ETH" src="https://img.shields.io/badge/ETH-627EEA?style=for-the-badge&logo=ethereum&logoColor=white"></a>
@@ -14,20 +14,20 @@
 </p>
 
 <p align="center">
-  <img src="extension/icons/icon128.png" width="96" alt="Browser Bridge: a purple bridge between a terminal and a browser window">
+  <img src="extension/icons/icon128.png" width="96" alt="Tabwing: two amber feathers lifting off an ink tile">
 </p>
 
-A Chromium extension plus a local daemon that lets a terminal AI agent (Claude Code, opencode, or anything that can run a shell command) drive your real browser: open a tab group, read pages, click, type, scroll, screenshot.
+A Chromium extension plus a local daemon that lets a terminal AI agent (Claude Code, opencode, or anything that can run a shell command) drive your real browser: open a tab group, read pages, click, type, scroll, screenshot. The agent works offstage, so your window, your tab and your focus stay yours.
 
 It is the same idea as Claude in Chrome, but the agent talks to Chrome over `chromectl` instead of a chat sidebar, so any CLI agent can use it.
 
-**Repository:** [github.com/ghostyshell/browser-bridge](https://github.com/ghostyshell/browser-bridge)
+**Repository:** [github.com/ghostyshell/tabwing](https://github.com/ghostyshell/tabwing)
 
 ```
   agent (you / Claude Code / opencode)
       │  chromectl snapshot | click | type ...
       ▼
-  daemon  127.0.0.1:8737          ~/.config/browser-bridge/
+  daemon  127.0.0.1:8737          ~/.config/tabwing/
       │  websocket (ping every 20s keeps the MV3 worker alive)
       ▼
   Chrome extension  ──►  your profile, your logins, your session
@@ -54,7 +54,8 @@ Chromium 136+ refuses `--remote-debugging-port` on your default profile, so CDP 
 | Keys | `chromectl key Enter`, `chromectl key Meta+a` |
 | Scroll | `chromectl scroll down`, `chromectl scroll --ref 12` |
 | Wait for something | `chromectl wait css=#results --timeout 8000` |
-| Screenshot | `chromectl screenshot` |
+| Screenshot | `chromectl screenshot` (`--full` for the whole page) |
+| Answer a JavaScript dialog | `chromectl dialog status`, `chromectl dialog accept [text]`, `chromectl dialog dismiss` |
 | Run JS in the page | `chromectl eval "document.title"` |
 
 Full reference: `chromectl help`.
@@ -62,7 +63,7 @@ Full reference: `chromectl help`.
 ## Install
 
 ```bash
-cd ~/Code/browser-bridge
+cd ~/Code/tabwing
 ./install.sh
 ```
 
@@ -72,10 +73,10 @@ Then load the extension once:
 
 1. Open `chrome://extensions`
 2. Turn on **Developer mode** (top right)
-3. **Load unpacked** → select `~/Code/browser-bridge/extension`
-4. Pin "Browser Bridge" to the toolbar
+3. **Load unpacked** → select `~/Code/tabwing/extension`
+4. Pin "Tabwing" to the toolbar
 
-The badge turns into a purple dot when the agent is connected.
+The badge turns into an amber dot when the agent is connected.
 
 ## Background by default
 
@@ -111,15 +112,26 @@ works in its own tab group while you keep browsing:
   Agent group and your tab is re-activated within the same tick.
 - `chromectl screenshot` captures through the debugger, so a background tab is
   photographed as it is right now, not as a stale frame, and nothing is brought
-  forward. Only if the debugger cannot attach (DevTools open on that tab, a
-  restricted page) does it fall back to `captureVisibleTab`, which needs the tab
-  in front for a moment; the CLI prints a note when that happened.
+  forward. If the surface capture is refused (a minimized window, an occluded
+  window) it retries with `fromSurface: false`, which renders the view without
+  raising it. Only if both fail (DevTools open on that tab, a restricted page)
+  does it fall back to `captureVisibleTab`, which needs the tab in front for a
+  moment; the CLI prints a note when that happened.
+- JavaScript dialogs are answered the moment they open, the way Playwright and
+  Puppeteer behave: `alert`/`confirm`/`prompt` are dismissed and a
+  `beforeunload` prompt is accepted so navigation proceeds. A dialog in a
+  background tab is invisible to you, and while it is open every command blocks
+  until the CLI times out. The command that triggered one reports what happened;
+  to accept it, arm it first with `chromectl dialog accept` and repeat the
+  action. The extension only sees dialogs while the debugger is attached, which
+  is why arming one attaches it; a dialog raised by an action that never uses
+  the debugger (a page timer, `--no-cdp`) can still block.
 
 `scripts/smoke-test.sh` runs the whole flow against a throwaway Chrome profile
-and asserts that your active tab never changes. Unpacked extensions share one id
-across every browser that loaded the same folder, so the test pins the daemon
-to the throwaway browser (`POST /pin`) and proves the pin with a nonce before it
-touches anything.
+and asserts that your active tab never changes. Unpacked extensions share one
+id across every browser that loaded the same folder, so the test pins the
+daemon to the throwaway browser by its per-profile `clientId` (`POST /pin`) and
+proves the pin with a nonce before it touches anything.
 
 ## Permission model
 
@@ -139,11 +151,11 @@ The gate is enforced in the extension, not the CLI, so an agent cannot grant its
 `chromectl snapshot` turns the page into lines an LLM can reason about:
 
 ```
-Bridge fixture
+Tabwing fixture
 http://127.0.0.1:8899/fixture.html
 viewport 1200x728 @ 0% (scrollY 0/728)  ·  9 elements  ·  1 forms, 0 iframes
 
-[0] heading1 "Bridge fixture"
+[0] heading1 "Tabwing fixture"
 [1] link "Go to page two" href=http://127.0.0.1:8899/page2.html
 [2] textbox "Your name"
 [3] combobox "Plan" value="Free"
@@ -162,6 +174,7 @@ Refs are written onto the DOM as `data-bb-ref` when you snapshot. They are valid
 chromectl status                  # daemon, extension, agent tabs, approvals
 chromectl tabs                    # agent tabs (--all for every tab)
 chromectl policy                  # what is approved
+chromectl dialog status           # armed dialog answer + the last one handled
 chromectl request https://x.com   # ask for a site without running an action
 chromectl reset                   # close every agent tab
 chromectl daemon logs 60          # last 60 daemon log lines
@@ -172,11 +185,11 @@ Flags: `--tab N` to target a specific agent tab, `--json` for raw output.
 
 ## Limits (by design)
 
-- Screenshots are the visible viewport, not full page.
+- Screenshots are the visible viewport by default; `--full` captures the whole page.
 - Shadow DOM is traversed, so web-component forms (Reddit's login, for one) can be typed into and clicked. Cross-origin iframes are still not traversed, so a CAPTCHA checkbox needs a coordinate click (see `chromectl cdp`).
 - Synthetic keys cannot trigger native browser shortcuts. `Meta/Ctrl+A`, `Tab`, `Enter` and `Escape` are handled explicitly.
 - `chromectl eval` needs `eval` to be allowed by the site. Sites with a strict Content-Security-Policy (most production apps) block it, and you get `eval_blocked`; use `snapshot`, `query`, `text`, `find` or `chromectl cdp` there. `--no-cdp` forces the injected path for `click`/`type`, which is worth using where the debugger is refused.
-- `alert()` / `confirm()` block the page and will time out the command. Close the dialog in the browser.
+- `alert()` / `confirm()` / `prompt()` do not block: Tabwing dismisses them when they open and reports it. Run `chromectl dialog accept` first when a flow needs the OK (for example a delete confirmation).
 - File upload pickers, native downloads and permission prompts need a human.
 - Chrome pages (`chrome://`, the Web Store, PDF viewer) cannot be scripted.
 
@@ -191,7 +204,7 @@ Flags: `--tab N` to target a specific agent tab, `--json` for raw output.
 | `restricted_page` | Chrome will not script that URL. Use a normal http(s) page. |
 | Commands hang | `chromectl daemon logs` and check the extension is enabled. |
 
-Logs: `~/.config/browser-bridge/daemon.log`. Screenshots land in `~/.config/browser-bridge/shots/`.
+Logs: `~/.config/tabwing/daemon.log`. Screenshots land in `~/.config/tabwing/shots/`.
 
 ## Layout
 
@@ -239,8 +252,8 @@ If you build on it, keep the MIT notice and link back here.
 ```bash
 chromectl daemon stop
 rm ~/.local/bin/chromectl
-rm ~/.claude/skills/browser-control ~/.config/opencode/skills/browser-control
-rm -rf ~/.config/browser-bridge
+rm ~/.claude/skills/tabwing ~/.config/opencode/skills/tabwing
+rm -rf ~/.config/tabwing
 ```
 
 Then remove the extension from `chrome://extensions`.

@@ -1,6 +1,6 @@
 /**
  * chromectl - drive the user's real Chrome from a shell, through the
- * Browser Bridge extension.
+ * Tabwing extension.
  *
  * Every page command runs inside the agent's own tab group, and only on
  * origins the user has approved in the extension popup.
@@ -12,15 +12,15 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import type { HealthResult, SnapshotResult, StatusResult, TabDescriptor } from '../shared/types';
 
-const ROOT = process.env.BB_ROOT || path.resolve(__dirname, '..', '..');
+const ROOT = process.env.TABWING_ROOT || path.resolve(__dirname, '..', '..');
 const DAEMON = path.join(ROOT, 'dist', 'daemon', 'server.js');
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'browser-bridge');
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'tabwing');
 const TOKEN_PATH = path.join(CONFIG_DIR, 'token');
 const LOG_PATH = path.join(CONFIG_DIR, 'daemon.log');
 const PID_PATH = path.join(CONFIG_DIR, 'daemon.pid');
 
-const BASE = `http://127.0.0.1:${process.env.BRIDGE_PORT || 8737}`;
+const BASE = `http://127.0.0.1:${process.env.TABWING_PORT || 8737}`;
 
 // Agents pipe our output into head/grep, which closes the pipe early. That is
 // not an error worth a stack trace.
@@ -93,7 +93,7 @@ async function rpc<T>(method: string, params: Record<string, unknown> = {}, time
   try {
     res = await fetch(`${BASE}/rpc`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-bridge-token': t },
+      headers: { 'content-type': 'application/json', 'x-tabwing-token': t },
       body: JSON.stringify({ method, params, timeout }),
       signal: AbortSignal.timeout((timeout || 60_000) + 15_000),
     });
@@ -109,6 +109,12 @@ async function rpc<T>(method: string, params: Record<string, unknown> = {}, time
   if (!body.ok) {
     const err = body.error || {};
     die(err.message ? `${err.code || 'error'}: ${err.message}` : `HTTP ${res.status}`);
+  }
+  // A dialog answered mid-action changed what the page then did, so it is
+  // reported next to every command that triggered one.
+  const result = body.result as { note?: string; dialogs?: unknown[] } | undefined;
+  if (result?.dialogs?.length && result.note) {
+    process.stderr.write(`chromectl: note: ${result.note}\n`);
   }
   return body.result as T;
 }
@@ -138,6 +144,7 @@ const BOOLEAN_FLAGS = new Set([
   'click-only',
   'cdp',
   'no-cdp',
+  'full',
 ]);
 
 function parse(argv: string[]): { args: string[]; flags: Flags } {
@@ -260,7 +267,7 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
     }
     out(`daemon      ${BASE}  pid ${h.pid}  up ${h.uptime}s`);
     if (!h.extensionConnected) {
-      out('extension   NOT connected - is Chrome running with Browser Bridge enabled? see: chromectl daemon logs');
+      out('extension   NOT connected - is Chrome running with Tabwing enabled? see: chromectl daemon logs');
       return;
     }
     const s = await rpc<StatusResult>('status');
@@ -538,8 +545,13 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
   },
 
   async screenshot({ flags }) {
-    const r = await rpc<{ path: string; width?: number; height?: number; url: string; borrowed?: boolean }>('page.screenshot', tabParam(flags), 90_000);
+    const r = await rpc<{ path: string; width?: number; height?: number; url: string; borrowed?: boolean; full?: boolean }>(
+      'page.screenshot',
+      { ...tabParam(flags), full: !!flags.full },
+      90_000,
+    );
     if (r.borrowed) process.stderr.write('chromectl: note: the debugger could not capture this tab (DevTools open?), so it was brought to front for a moment\n');
+    if (flags.full && r.full === false) process.stderr.write('chromectl: note: the whole-page capture was refused, so this is the viewport\n');
     if (flags.json) return out(JSON.stringify(r, null, 2));
     if (flags.out) {
       fs.copyFileSync(r.path, String(flags.out));
@@ -548,6 +560,26 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
       out(r.path);
       if (r.width) out(`${r.width}x${r.height}  ·  ${r.url}`);
     }
+  },
+
+  async dialog({ args, flags }) {
+    const action = String(args[0] || 'status');
+    const r = await rpc<{
+      armed?: { accept: boolean; promptText?: string | null } | null;
+      last?: { type: string; message: string; handled: string } | null;
+    }>('page.dialog', {
+      ...tabParam(flags),
+      action,
+      ...(args[1] != null ? { promptText: args.slice(1).join(' ') } : {}),
+    });
+    if (flags.json) return out(JSON.stringify(r, null, 2));
+    if (action === 'status') {
+      if (r.armed) out(`armed: the next dialog will be ${r.armed.accept ? 'accepted' : 'dismissed'}${r.armed.promptText ? ` with "${r.armed.promptText}"` : ''}`);
+      else out('armed: nothing (dialogs are dismissed by default)');
+      if (r.last) out(`last: ${r.last.type}("${r.last.message}") ${r.last.handled}`);
+      return;
+    }
+    out(`armed: the next dialog on this tab will be ${action === 'accept' ? 'accepted' : 'dismissed'}`);
   },
 
   async policy({ flags }) {
@@ -562,7 +594,7 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
     const origin = args[0];
     if (!origin) die('usage: chromectl request <url|origin>');
     const r = await rpc<{ pending: string }>('policy.request', { url: normalizeUrl(origin) });
-    out(`permission requested for ${r.pending} - open the Browser Bridge icon in Chrome and press Allow`);
+    out(`permission requested for ${r.pending} - open the Tabwing icon in Chrome and press Allow`);
   },
 
   async reset() {
@@ -620,7 +652,7 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
   },
 
   async help() {
-    out(`chromectl - control Chrome from the shell (Browser Bridge)
+    out(`chromectl - control Chrome from the shell (Tabwing)
 
   chromectl status                  daemon + extension + agent tabs + permissions
   chromectl open <url> [--active]   open a tab in the agent group (background unless --active)
@@ -640,7 +672,8 @@ const commands: Record<string, (ctx: CommandContext) => Promise<void>> = {
   chromectl eval "<js>"             run JS in the page (blocked by strict CSP sites)
   chromectl upload <css> <file>     set a file input
   chromectl cdp <Domain.m> [json]   raw CDP command (cookies, emulation)
-  chromectl screenshot [--out f]    capture the visible tab, returns a PNG path
+  chromectl screenshot [--out f] [--full]  PNG path; --full captures the whole page
+  chromectl dialog [status|accept [text]|dismiss]  answer the next JS dialog
   chromectl tabs [--all]            agent tabs (or every tab)
   chromectl activate                bring the agent tab to the front
   chromectl goto <url> | back | forward | reload | close

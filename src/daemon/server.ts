@@ -1,5 +1,5 @@
 /**
- * Browser Bridge daemon.
+ * Tabwing daemon.
  *
  *   extension  --ws://127.0.0.1:8737/ws-->  daemon  <--http /rpc-->  chromectl / agents
  *
@@ -8,7 +8,7 @@
  *
  * Security posture:
  *   - binds to 127.0.0.1 only
- *   - /rpc requires a bearer token from ~/.config/browser-bridge/token (0600)
+ *   - /rpc requires a bearer token from ~/.config/tabwing/token (0600)
  *   - /rpc rejects any request carrying an Origin header (i.e. a web page)
  *   - /ws only accepts chrome-extension:// origins (or the bearer token)
  */
@@ -20,16 +20,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { BridgeFailure, ExtensionInfo, HealthResult } from '../shared/types';
+import type { TabwingFailure, ExtensionInfo, HealthResult } from '../shared/types';
 
 const VERSION = '1.2.0';
 const HOST = '127.0.0.1';
-const PORT = Number(process.env.BRIDGE_PORT || 8737);
+const PORT = Number(process.env.TABWING_PORT || 8737);
 const PING_MS = 20_000;
 const DEFAULT_TIMEOUT = 60_000;
 const CONNECT_GRACE_MS = 8_000;
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'browser-bridge');
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'tabwing');
 const TOKEN_PATH = path.join(CONFIG_DIR, 'token');
 const LOG_PATH = path.join(CONFIG_DIR, 'daemon.log');
 const SHOT_DIR = path.join(CONFIG_DIR, 'shots');
@@ -186,7 +186,7 @@ function headerValue(req: http.IncomingMessage, name: string): string {
 }
 
 function authorized(req: http.IncomingMessage, url: URL): boolean {
-  const header = headerValue(req, 'x-bridge-token');
+  const header = headerValue(req, 'x-tabwing-token');
   const auth = headerValue(req, 'authorization');
   const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   const query = url.searchParams.get('token') ?? '';
@@ -221,8 +221,8 @@ async function handleRpc(req: http.IncomingMessage, res: http.ServerResponse, bo
       'extension_not_connected',
       503,
       everConnected
-        ? 'The Browser Bridge extension is not connected. Open Chrome and check chrome://extensions, then open the extension popup for its status.'
-        : 'No Browser Bridge extension has connected yet. Load it once: chrome://extensions -> Developer mode -> Load unpacked -> select the extension/ folder in this project.',
+        ? 'The Tabwing extension is not connected. Open Chrome and check chrome://extensions, then open the extension popup for its status.'
+        : 'No Tabwing extension has connected yet. Load it once: chrome://extensions -> Developer mode -> Load unpacked -> select the extension/ folder in this project.',
     );
   }
 
@@ -240,7 +240,7 @@ async function handleRpc(req: http.IncomingMessage, res: http.ServerResponse, bo
   } catch (e) {
     const err = e as Error & { code?: string };
     log(`rpc ${method} ERR ${err.code || 'error'} ${err.message}`);
-    const failure: BridgeFailure = { code: err.code || 'error', message: err.message || String(e) };
+    const failure: TabwingFailure = { code: err.code || 'error', message: err.message || String(e) };
     return json(res, 200, { ok: false, error: failure, ms: Date.now() - started });
   }
 }
@@ -283,15 +283,21 @@ const server = http.createServer((req, res) => {
     // Test harness: route commands to a specific connected browser (the
     // throwaway profile) instead of whichever one said hello first.
     if (!authorized(req, url)) return fail(res, 'unauthorized', 401, 'Bad or missing token');
+    const wantClient = url.searchParams.get('clientId');
     const want = url.searchParams.get('extensionId');
+    if (wantClient !== null && !wantClient) return fail(res, 'bad_request', 400, 'clientId is empty');
     // Unpacked extensions get their id from their folder, so every browser that
-    // loaded this checkout reports the same id: take the most recent hello.
-    const match = [...clients]
-      .filter((c) => c.readyState === 1 && c.__info?.extensionId === want)
-      .sort((a, b) => (b.__info?.since ?? 0) - (a.__info?.since ?? 0))[0];
-    if (!match) return fail(res, 'no_such_client', 404, `No connected extension with id ${want}`);
+    // loaded this checkout reports the same extensionId. The per-profile
+    // clientId is what separates the user's browser from a test profile; fall
+    // back to the most recent hello when only an extensionId is given.
+    const match = wantClient
+      ? [...clients].find((c) => c.readyState === 1 && c.__info?.clientId === wantClient)
+      : [...clients]
+          .filter((c) => c.readyState === 1 && c.__info?.extensionId === want)
+          .sort((a, b) => (b.__info?.since ?? 0) - (a.__info?.since ?? 0))[0];
+    if (!match) return fail(res, 'no_such_client', 404, `No connected extension with ${wantClient ? `clientId ${wantClient}` : `id ${want}`}`);
     activeClient = match;
-    log(`pinned client id=${want}`);
+    log(`pinned client ${wantClient ? `clientId=${wantClient}` : `id=${want}`}`);
     return json(res, 200, { ok: true, extension: match.__info });
   }
 
@@ -345,6 +351,7 @@ wss.on('connection', (ws: ClientSocket) => {
         version: msg.version,
         ua: msg.ua,
         extensionId: msg.extensionId,
+        ...(typeof msg.clientId === 'string' ? { clientId: msg.clientId } : {}),
         since: Date.now(),
       };
       // First healthy client wins. Two browsers can be connected (the real

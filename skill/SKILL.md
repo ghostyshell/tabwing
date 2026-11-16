@@ -1,11 +1,11 @@
 ---
-name: browser-control
+name: tabwing
 description: Drive the user's real Chrome browser from the shell - read pages, click, type, scroll, screenshot - inside a dedicated Agent tab group, using their actual logins. Use when the user asks you to look at or act on a web page, check something in a site they are signed into, fill or submit a web form, click through a web UI, capture a screenshot of a page, or verify a web change end to end.
 ---
 
-# Browser control
+# Tabwing
 
-`chromectl` drives the user's own Chrome through the Browser Bridge extension. You get the real browser: their profile, their logins, their cookies, their extensions. Every action lands in a **purple "Agent" tab group** so the user can watch and undo.
+`chromectl` drives the user's own Chrome through the Tabwing extension. You get the real browser: their profile, their logins, their cookies, their extensions. Every action lands in an **orange "Agent" tab group** so the user can watch and undo.
 
 ## Background by design
 
@@ -14,6 +14,7 @@ Everything runs in tabs behind the one the user is reading, like Claude in Chrom
 - Never run `chromectl activate` or `open --active` on your own. Only when the user asks to see the tab.
 - A page that "does nothing" is not fixed by activating it: snapshot again, `wait` on a signal, or check `chromectl daemon logs 20`.
 - If `screenshot` prints `note: ... brought to front for a moment`, the debugger could not attach to that tab (DevTools open, restricted page). Mention it once; do not retry in a loop.
+- A JavaScript dialog (`alert`, `confirm`, `prompt`) is answered the instant it opens, so a background tab cannot hang behind it; see Dialogs below.
 - Popup windows opened by a page (OAuth, print dialogs) are outside the group and do take focus; tell the user instead of driving them.
 
 ## Before the first action
@@ -22,11 +23,11 @@ Everything runs in tabs behind the one the user is reading, like Claude in Chrom
 chromectl status
 ```
 
-- `extension NOT connected` → tell the user to open Chrome and check `chrome://extensions` for Browser Bridge. Do not try to fix it by editing files.
+- `extension NOT connected` → tell the user to open Chrome and check `chrome://extensions` for Tabwing. Do not try to fix it by editing files.
 - `daemon not running` → `chromectl daemon start`.
-- `chromectl: command not found` → run `~/Code/browser-bridge/bin/chromectl` directly, or re-run `~/Code/browser-bridge/install.sh`.
+- `chromectl: command not found` → run `~/Code/tabwing/bin/chromectl` directly, or re-run `~/Code/tabwing/install.sh`.
 
-Never run `chromectl daemon stop` unless the user asked to shut the bridge down.
+Never run `chromectl daemon stop` unless the user asked to shut Tabwing down.
 
 ## The loop
 
@@ -98,10 +99,26 @@ Exit code is `2` when nothing appeared, so `if ! chromectl wait ...; then ...; f
 
 ```bash
 chromectl screenshot              # prints a PNG path
+chromectl screenshot --full       # the whole page, not just the viewport
 chromectl screenshot --out /tmp/check.png
 ```
 
-Visible viewport only (it is a 2x DPR image, so pixel size is doubled). To show something further down, `chromectl scroll --ref <n>` or `scroll bottom` first. Refer to the path in your reply; do not paste base64.
+The viewport capture is a 2x DPR image, so pixel size is doubled. `--full` reaches past the viewport, so prefer it when the thing you need to show is further down; otherwise `chromectl scroll --ref <n>` first. Refer to the path in your reply; do not paste base64. Screenshots are taken through the debugger, so a background tab is photographed live without being brought forward.
+
+## Dialogs
+
+`alert`, `confirm` and `prompt` are answered the moment they open: dismissed by default, with a note on the command that triggered one. A `beforeunload` prompt is accepted so navigation proceeds. That keeps a background tab from hanging behind a dialog nobody can see.
+
+The extension only sees a dialog while the debugger is attached, so arming one attaches it. A dialog raised by work that never touches the debugger (a page timer longer than the 20s idle detach, or `--no-cdp`) can still block; take a fresh snapshot and retry with a CDP path.
+
+If a flow needs the OK, arm it first and repeat the action:
+
+```bash
+chromectl dialog accept                 # accept the next confirm()/alert()
+chromectl dialog accept "draft.txt"     # answer a prompt() with text
+chromectl dialog dismiss                # back to the default
+chromectl dialog status                 # what is armed, and the last dialog handled
+```
 
 ## Permissions
 
@@ -109,7 +126,7 @@ Origins need user approval. The agent cannot approve sites, by design.
 
 1. The command fails with `origin_not_allowed`.
 2. The extension popup now shows a permission card for that site.
-3. Ask the user: "Approve `<origin>` in the Browser Bridge icon?" and stop.
+3. Ask the user: "Approve `<origin>` in the Tabwing icon?" and stop.
 4. When they confirm, retry the same command.
 
 Do not retry more than once. If it still fails, the user did not click Allow.
@@ -187,9 +204,9 @@ chromectl screenshot --out /tmp/pricing.png
 
 ## Limits
 
-- No cross-origin iframe content, no shadow DOM piercing.
+- No cross-origin iframe content. Shadow DOM is traversed, so web-component forms work.
 - Synthetic keys cannot trigger native browser shortcuts (`Meta+T` etc.).
-- `alert()`/`confirm()` blocks the page: ask the user to dismiss it.
-- No file uploads, native permission prompts, or download dialogs.
-- One command at a time; do not run two `chromectl` actions in parallel on the same tab.
+- Dialogs are dismissed unless you arm `chromectl dialog accept` first; a `beforeunload` prompt is accepted so navigation continues.
+- File inputs work through `chromectl upload <css> <file>`; native permission prompts and download dialogs still need a human.
+- Commands can now share the debugger in parallel, but each action still assumes the refs from the last snapshot: run steps in order.
 - Chromium shows an "is debugging this browser" bar while the debugger is attached; it goes away 20s after the last action. That is expected, not an error.
