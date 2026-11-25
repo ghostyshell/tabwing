@@ -818,7 +818,8 @@ declare global {
       :host([data-driving="on"]) .cursor { opacity: 1; }
       .halo { position: absolute; left: -22px; top: -22px; width: 44px; height: 44px; border-radius: 50%;
         background: radial-gradient(circle, rgba(${AMBER}, .5) 0, rgba(${AMBER}, .2) 45%, rgba(${AMBER}, 0) 70%); }
-      .cursor svg { position: absolute; left: -2px; top: -2px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); }
+      .cursor svg { position: absolute; left: -2px; top: -2px;
+        filter: drop-shadow(0 0 2px rgba(${EDGE}, .95)) drop-shadow(0 0 6px rgba(${AMBER}, .75)); }
       .ripple { position: fixed; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%;
         border: 2px solid rgba(${EDGE}, .9); animation: ripple .5s ease-out forwards; }
       @keyframes ripple {
@@ -888,9 +889,11 @@ declare global {
         svg.setAttribute('viewBox', '0 0 20 26');
         const arrow = document.createElementNS(NS, 'path');
         arrow.setAttribute('d', 'M2 2 L2 21 L7 16.5 L10.5 24 L13.5 22.7 L10 15.3 L16.5 15.3 Z');
-        arrow.setAttribute('fill', '#1c1917');
-        arrow.setAttribute('stroke', '#fff');
-        arrow.setAttribute('stroke-width', '1.6');
+        // White arrow with a thin amber edge and an orange glow (the svg filter),
+        // so it reads on white pages as well as dark ones.
+        arrow.setAttribute('fill', '#fff');
+        arrow.setAttribute('stroke', 'rgb(217, 119, 6)');
+        arrow.setAttribute('stroke-width', '1.4');
         arrow.setAttribute('stroke-linejoin', 'round');
         svg.appendChild(arrow);
         cursor.appendChild(svg);
