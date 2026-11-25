@@ -232,7 +232,8 @@ button {
   white-space: nowrap;
 }
 
-button:hover {
+button:hover,
+button:focus-visible {
   background: #fafafa;
 }
 
@@ -243,7 +244,8 @@ button.primary {
   font-weight: 600;
 }
 
-button.primary:hover {
+button.primary:hover,
+button.primary:focus-visible {
   background: #5b21b6;
 }
 
@@ -263,7 +265,8 @@ button.x {
   cursor: pointer;
 }
 
-button.x:hover {
+button.x:hover,
+button.x:focus-visible {
   color: #b91c1c;
   background: none;
 }

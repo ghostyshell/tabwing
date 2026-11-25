@@ -78,7 +78,7 @@ function render(state: StatusResult): void {
   } else {
     list.replaceChildren(
       ...allowed.map((origin) => {
-        const remove = el('button', { className: 'x', title: `Block ${origin}`, textContent: '×' });
+        const remove = el('button', { className: 'x', title: `Block ${origin}`, ariaLabel: `Block ${origin}`, textContent: '×' });
         remove.addEventListener('click', async () => {
           await send({ type: 'revoke', origin });
           await refresh();
