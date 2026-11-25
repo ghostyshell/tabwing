@@ -133,6 +133,18 @@ id across every browser that loaded the same folder, so the test pins the
 daemon to the throwaway browser by its per-profile `clientId` (`POST /pin`) and
 proves the pin with a nonce before it touches anything.
 
+## Watching it work
+
+When you look at a tab the agent is driving, it shows: an amber glow frames
+the page, and a cursor with a soft highlight glides to each element before the
+agent clicks, types into or hovers over it, with a box around the target and a
+ripple on every click. The glow fades after 20 seconds without a command.
+
+The overlay ignores the mouse, lives in a closed shadow root so page styles and
+snapshots never see it, and is hidden for every screenshot, so the agent's view
+of the page is unchanged. In a background tab nothing waits for the animation,
+and reduced motion turns the glide and the pulse off.
+
 ## Permission model
 
 The agent can only touch tabs in its own **Agent** tab group, and only on origins you approved. Approval happens in the extension popup, which the agent cannot click:

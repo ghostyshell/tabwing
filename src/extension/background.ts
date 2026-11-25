@@ -20,7 +20,7 @@ import type {
   TabDescriptor,
 } from '../shared/types';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const PORT = 8737;
 const WS_URL = `ws://127.0.0.1:${PORT}/ws`;
 const GROUP_TITLE = 'Agent';
@@ -150,7 +150,9 @@ async function requireOrigin(url: string | undefined, { tabId = null }: { tabId?
 }
 
 async function assertAllowed(tab: chrome.tabs.Tab): Promise<void> {
-  return requireOrigin(tab?.url || tab?.pendingUrl, { tabId: tab?.id ?? null });
+  await requireOrigin(tab?.url || tab?.pendingUrl, { tabId: tab?.id ?? null });
+  // Every permitted command on a tab is the agent driving it: glow on.
+  if (tab?.id != null) void overlay(tab.id, { op: 'drive' });
 }
 
 /* ------------------------------------------------------------------ */
@@ -459,6 +461,22 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 
 const NAV_ACTIONS = new Set<PageAction>(['click', 'key', 'type', 'select', 'hover']);
 
+/**
+ * Steer the in-page driving overlay (glow, cursor, target box). Cosmetic, so it
+ * never throws and never holds an action up for long; a page that cannot host
+ * a content script (chrome://, the Web Store, PDFs) just goes without.
+ */
+async function overlay(tabId: number, params: ActionParams): Promise<void> {
+  const call = async (): Promise<void> => {
+    // Only the fire-and-forget 'drive' injects. Injection waits for the page to
+    // finish parsing, and the awaited calls sit between measuring a target and
+    // pressing it, so they skip a page that has no overlay yet instead.
+    if (!params.op || params.op === 'drive') await ensureInjected(tabId);
+    await chrome.tabs.sendMessage(tabId, { __bb: 1, action: 'overlay', params });
+  };
+  await Promise.race([call().catch(() => undefined), sleep(1500)]);
+}
+
 async function callPage<T>(tab: chrome.tabs.Tab, action: PageAction, params: ActionParams = {}): Promise<T | NavigationResult> {
   const unwrap = (res: Envelope<unknown> | undefined): T => {
     if (!res) throw fail('no_response', 'The page did not respond (it may be navigating). Retry.');
@@ -714,18 +732,40 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 /** Resolve a target to viewport coordinates through the page, via CDP. */
-async function cdpPoint(tabId: number, p: ActionParams): Promise<{ x: number; y: number; name: string } | null> {
+type Point = { x: number; y: number; name: string; box: { left: number; top: number; width: number; height: number } };
+
+/** Resolve a target to viewport coordinates through the page, via CDP, and
+ *  glide the overlay cursor there first so the user sees what is about to happen. */
+async function cdpPoint(tabId: number, p: ActionParams): Promise<Point | null> {
   const res = (await cdp(tabId, 'Runtime.evaluate', {
     expression: `(() => {
       const el = ${elementExpression(p)};
       if (!el) return null;
-      el.scrollIntoView({ block: 'center', inline: 'center' });
+      // instant: a page-level scroll-behavior: smooth would otherwise still be
+      // scrolling when the press lands, and the press would miss.
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2, name: (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().slice(0, 80) };
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, name: (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().slice(0, 80),
+        box: { left: r.left, top: r.top, width: r.width, height: r.height } };
     })()`,
     returnByValue: true,
-  })) as { result?: { value?: { x: number; y: number; name: string } | null } };
-  return res.result?.value ?? null;
+  })) as { result?: { value?: Point | null } };
+  const point = res.result?.value ?? null;
+  if (!point) return null;
+  await overlay(tabId, { op: 'point', x: point.x, y: point.y, box: point.box });
+  // The glide takes a moment on a watched tab; anything that moved meanwhile
+  // (late layout, a sticky header settling) must not move the press.
+  const again = (await cdp(tabId, 'Runtime.evaluate', {
+    expression: `(() => {
+      const el = ${elementExpression(p)};
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`,
+    returnByValue: true,
+  }).catch(() => null)) as { result?: { value?: { x: number; y: number } | null } } | null;
+  if (again?.result?.value) Object.assign(point, again.result.value);
+  return point;
 }
 
 const MOUSE_MODIFIERS: Record<string, number> = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
@@ -811,6 +851,7 @@ async function cdpClick(tabId: number, p: ActionParams): Promise<Record<string, 
   const box = await cdpPoint(tabId, p);
   if (!box) throw new Error('element not found');
   for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'] as const) {
+    if (type === 'mousePressed') await overlay(tabId, { op: 'press' });
     await cdp(tabId, 'Input.dispatchMouseEvent', {
       type,
       x: box.x,
@@ -1512,27 +1553,34 @@ const methods: Record<string, Method> = {
       /* viewport is nice to have */
     }
 
-    // Prefer the debugger: CDP screenshots capture a background tab without
-    // switching the visible one at all (the technique Playwright and browser-use
-    // rely on). captureVisibleTab is the fallback, and it does need the tab
-    // active, so there we borrow it and hand it straight back.
+    // The overlay is for the person watching, not for the agent: keep it out
+    // of every capture.
+    await overlay(tab.id!, { op: 'hide' });
     try {
-      const dataUrl = await Promise.race([
-        cdpScreenshot(tab.id!, p.full === true),
-        sleep(8000).then(() => Promise.reject(new Error('cdp screenshot timed out'))),
-      ]);
-      return { dataUrl, url: tab.url, title: tab.title, full: p.full === true, ...(meta as object) };
-    } catch {
-      const [previous] = await chrome.tabs.query({ windowId: tab.windowId, active: true });
-      const borrowed = previous?.id !== tab.id;
-      if (borrowed) await showTab(tab.id!);
+      // Prefer the debugger: CDP screenshots capture a background tab without
+      // switching the visible one at all (the technique Playwright and browser-use
+      // rely on). captureVisibleTab is the fallback, and it does need the tab
+      // active, so there we borrow it and hand it straight back.
       try {
-        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-        // This path is always the viewport: say so when the whole page was asked for.
-        return { dataUrl, url: tab.url, title: tab.title, borrowed, full: false, ...(meta as object) };
-      } finally {
-        if (borrowed && previous?.id != null) await showTab(previous.id).catch(() => undefined);
+        const dataUrl = await Promise.race([
+          cdpScreenshot(tab.id!, p.full === true),
+          sleep(8000).then(() => Promise.reject(new Error('cdp screenshot timed out'))),
+        ]);
+        return { dataUrl, url: tab.url, title: tab.title, full: p.full === true, ...(meta as object) };
+      } catch {
+        const [previous] = await chrome.tabs.query({ windowId: tab.windowId, active: true });
+        const borrowed = previous?.id !== tab.id;
+        if (borrowed) await showTab(tab.id!);
+        try {
+          const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+          // This path is always the viewport: say so when the whole page was asked for.
+          return { dataUrl, url: tab.url, title: tab.title, borrowed, full: false, ...(meta as object) };
+        } finally {
+          if (borrowed && previous?.id != null) await showTab(previous.id).catch(() => undefined);
+        }
       }
+    } finally {
+      void overlay(tab.id!, { op: 'show' });
     }
   },
 

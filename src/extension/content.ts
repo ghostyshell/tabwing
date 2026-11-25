@@ -364,6 +364,8 @@ declare global {
     const r = el.getBoundingClientRect();
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
+    await overlay.point(x, y, r);
+    overlay.press();
     const base = {
       bubbles: true,
       cancelable: true,
@@ -416,6 +418,7 @@ declare global {
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
     await sleep(50);
     const r = el.getBoundingClientRect();
+    await overlay.point(r.left + r.width / 2, r.top + r.height / 2, r);
     const base = {
       bubbles: true,
       cancelable: true,
@@ -442,6 +445,7 @@ declare global {
     const el = find(p);
     const text = String(p.text ?? '');
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    await aim(el);
     if (typeof el.focus === 'function') el.focus();
     await sleep(30);
 
@@ -644,6 +648,7 @@ declare global {
   async function select(p: PageParams = {}) {
     const el = find(p);
     if (el.tagName.toLowerCase() !== 'select') throw new Error('Target is not a <select> element');
+    await aim(el);
     const sel = el as unknown as HTMLSelectElement;
     const wanted = new Set(
       (Array.isArray(p.values) ? p.values : [p.value]).flat().map((v) => collapse(v).toLowerCase()),
@@ -778,6 +783,249 @@ declare global {
   }
 
   /* ---------------------------------------------------------------- */
+  /* driving overlay                                                  */
+  /* ---------------------------------------------------------------- */
+
+  // What the user sees while an agent drives this tab: an amber glow around
+  // the viewport, and a cursor that glides to each element before it is used.
+  // It sits in a closed shadow root on <html>, so page CSS, body text and
+  // snapshots never see it; it ignores the pointer; and it hides for
+  // screenshots so the agent never sees it either.
+  type Box = { left: number; top: number; width: number; height: number };
+
+  const overlay = (() => {
+    const GLIDE_MS = 320;
+    /** Same as the worker's debugger idle: the glow fades after that much quiet. */
+    const LINGER_MS = 20_000;
+    const BOX_MS = 1400;
+    const AMBER = '245, 158, 11';
+    const EDGE = '217, 119, 6';
+    const CSS = `
+      .frame { position: fixed; inset: 0; opacity: 0; transition: opacity .35s ease;
+        box-shadow: inset 0 0 0 2px rgba(${EDGE}, .9), inset 0 0 28px 6px rgba(${AMBER}, .38); }
+      /* The pulse fades a second, softer layer in and out: opacity runs on the
+         compositor, a viewport-wide box-shadow animation would repaint every frame. */
+      .frame::after { content: ''; position: absolute; inset: 0; opacity: 0;
+        box-shadow: inset 0 0 44px 12px rgba(${AMBER}, .22); }
+      :host([data-driving="on"]) .frame { opacity: 1; }
+      :host([data-driving="on"]) .frame::after { animation: breathe 2.4s ease-in-out infinite; }
+      @keyframes breathe { 50% { opacity: 1; } }
+      .box { position: fixed; border-radius: 6px; opacity: 0; transition: opacity .2s ease;
+        border: 2px solid rgba(${EDGE}, .95); background: rgba(${AMBER}, .12); box-shadow: 0 0 0 4px rgba(${AMBER}, .18); }
+      .box.show { opacity: 1; }
+      .cursor { position: fixed; left: 0; top: 0; opacity: 0; transform: translate(var(--x), var(--y));
+        transition: transform ${GLIDE_MS}ms cubic-bezier(.2, .7, .2, 1), opacity .25s ease; }
+      :host([data-driving="on"]) .cursor { opacity: 1; }
+      .halo { position: absolute; left: -22px; top: -22px; width: 44px; height: 44px; border-radius: 50%;
+        background: radial-gradient(circle, rgba(${AMBER}, .5) 0, rgba(${AMBER}, .2) 45%, rgba(${AMBER}, 0) 70%); }
+      .cursor svg { position: absolute; left: -2px; top: -2px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); }
+      .ripple { position: fixed; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%;
+        border: 2px solid rgba(${EDGE}, .9); animation: ripple .5s ease-out forwards; }
+      @keyframes ripple {
+        from { transform: translate(var(--x), var(--y)) scale(.3); opacity: 1; }
+        to { transform: translate(var(--x), var(--y)) scale(1.6); opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) {
+        .cursor { transition: opacity .25s ease; }
+        :host([data-driving="on"]) .frame::after { animation: none; }
+      }
+      @media print { :host { display: none !important; } }`;
+
+    const XHTML = 'http://www.w3.org/1999/xhtml';
+    const reduced = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Background tabs paint nothing and throttle timers to a second or more, so
+    // only a tab the user is looking at waits for the glide or draws a ripple.
+    const watched = (): boolean => document.visibilityState === 'visible';
+
+    let host: HTMLElement | null = null;
+    let root!: ShadowRoot;
+    let box!: HTMLElement;
+    let cursor!: HTMLElement;
+    let at = { x: innerWidth / 2, y: innerHeight / 2 };
+    /** Screenshots in flight: two overlapping captures must both see it hidden. */
+    let hides = 0;
+    let linger: ReturnType<typeof setTimeout> | undefined;
+    let boxTimer: ReturnType<typeof setTimeout> | undefined;
+    let unhide: ReturnType<typeof setTimeout> | undefined;
+
+    function el(cls: string, parent: Node): HTMLElement {
+      const d = document.createElement('div');
+      d.className = cls;
+      parent.appendChild(d);
+      return d;
+    }
+
+    function place(x: number, y: number): void {
+      at = { x, y };
+      cursor.style.setProperty('--x', `${x}px`);
+      cursor.style.setProperty('--y', `${y}px`);
+      host!.dataset.x = String(Math.round(x));
+      host!.dataset.y = String(Math.round(y));
+    }
+
+    /** False where there is nothing to draw on: XML feeds, SVG files, sitemaps. */
+    function mount(): boolean {
+      const doc = document.documentElement;
+      if (!doc || doc.namespaceURI !== XHTML) return false;
+      if (!host) {
+        const h = document.createElement('tabwing-overlay');
+        h.setAttribute('aria-hidden', 'true');
+        h.style.cssText =
+          'all:initial;position:fixed;inset:0;pointer-events:none!important;z-index:2147483647;contain:strict;';
+        // DOM building only (no innerHTML) and a constructed sheet: Trusted
+        // Types and a strict style-src cannot block either.
+        root = h.attachShadow({ mode: 'closed' });
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(CSS);
+        root.adoptedStyleSheets = [sheet];
+        el('frame', root);
+        box = el('box', root);
+        cursor = el('cursor', root);
+        el('halo', cursor);
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('width', '20');
+        svg.setAttribute('height', '26');
+        svg.setAttribute('viewBox', '0 0 20 26');
+        const arrow = document.createElementNS(NS, 'path');
+        arrow.setAttribute('d', 'M2 2 L2 21 L7 16.5 L10.5 24 L13.5 22.7 L10 15.3 L16.5 15.3 Z');
+        arrow.setAttribute('fill', '#1c1917');
+        arrow.setAttribute('stroke', '#fff');
+        arrow.setAttribute('stroke-width', '1.6');
+        arrow.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(arrow);
+        cursor.appendChild(svg);
+        host = h; // only once it is fully built
+        place(at.x, at.y);
+      }
+      if (!host.isConnected) {
+        // Pages that rebuild <html> (some hydration recoveries) drop the host:
+        // put it back rather than trusting the first mount.
+        doc.appendChild(host);
+        void cursor.offsetWidth; // commit the start position so the first glide animates
+      }
+      host.style.display = hides > 0 ? 'none' : '';
+      return true;
+    }
+
+    /** The agent is acting on this tab: glow on, and off again after a quiet spell. */
+    function drive(): boolean {
+      if (!mount()) return false;
+      host!.dataset.driving = 'on';
+      clearTimeout(linger);
+      linger = setTimeout(() => {
+        if (host) host.dataset.driving = 'off';
+        box.classList.remove('show');
+      }, LINGER_MS);
+      return true;
+    }
+
+    /** Glide the cursor to a point (viewport px) and outline the element there. */
+    async function point(x: number, y: number, target?: Box): Promise<void> {
+      if (!drive()) return;
+      if (target) {
+        box.style.left = `${target.left - 3}px`;
+        box.style.top = `${target.top - 3}px`;
+        box.style.width = `${target.width + 6}px`;
+        box.style.height = `${target.height + 6}px`;
+        box.classList.add('show');
+        clearTimeout(boxTimer);
+        boxTimer = setTimeout(() => box.classList.remove('show'), BOX_MS);
+      }
+      const moved = Math.hypot(x - at.x, y - at.y) > 2;
+      place(x, y);
+      if (moved && watched() && !reduced() && hides === 0) await sleep(GLIDE_MS);
+    }
+
+    function press(): void {
+      if (!drive() || !watched() || reduced() || hides > 0) return;
+      const ring = el('ripple', root);
+      ring.style.setProperty('--x', `${at.x}px`);
+      ring.style.setProperty('--y', `${at.y}px`);
+      setTimeout(() => ring.remove(), 700);
+    }
+
+    /** Out of the way for a screenshot. Restores itself if `show` never comes. */
+    async function hide(): Promise<void> {
+      hides += 1;
+      if (host) host.style.display = 'none';
+      clearTimeout(unhide);
+      unhide = setTimeout(() => {
+        hides = 0;
+        if (host) host.style.display = '';
+      }, 15_000);
+      // captureVisibleTab reads the last painted frame, so a watched tab waits
+      // for one paint without the overlay; a CDP capture renders on demand.
+      if (host && watched()) {
+        await Promise.race([
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+          sleep(120),
+        ]);
+      }
+    }
+
+    function show(): void {
+      hides = Math.max(0, hides - 1);
+      if (hides > 0) return;
+      clearTimeout(unhide);
+      if (host) host.style.display = '';
+    }
+
+    // Cosmetic all the way down: whatever the page does to us, an action that
+    // calls in here must never fail because of the overlay.
+    return {
+      drive: (): void => {
+        try {
+          drive();
+        } catch {
+          /* cosmetic */
+        }
+      },
+      point: (x: number, y: number, target?: Box): Promise<void> => point(x, y, target).catch(() => undefined),
+      press: (): void => {
+        try {
+          press();
+        } catch {
+          /* cosmetic */
+        }
+      },
+      hide: (): Promise<void> => hide().catch(() => undefined),
+      show: (): void => {
+        try {
+          show();
+        } catch {
+          /* cosmetic */
+        }
+      },
+    };
+  })();
+
+  /** Point the overlay cursor at an element the content script is about to use. */
+  async function aim(el: Element): Promise<void> {
+    const r = el.getBoundingClientRect();
+    await overlay.point(r.left + r.width / 2, r.top + r.height / 2, r);
+  }
+
+  async function overlayAction(p: PageParams = {}) {
+    switch (p.op) {
+      case 'point':
+        await overlay.point(Number(p.x), Number(p.y), p.box);
+        break;
+      case 'press':
+        overlay.press();
+        break;
+      case 'hide':
+        await overlay.hide();
+        break;
+      case 'show':
+        overlay.show();
+        break;
+      default:
+        overlay.drive();
+    }
+    return { overlay: p.op || 'drive' };
+  }
+
+  /* ---------------------------------------------------------------- */
   /* rpc                                                              */
   /* ---------------------------------------------------------------- */
 
@@ -795,6 +1043,7 @@ declare global {
     links,
     query,
     viewport,
+    overlay: overlayAction,
   };
 
   chrome.runtime.onMessage.addListener((msg: Envelope, _sender, respond: (r: unknown) => void) => {
@@ -808,6 +1057,8 @@ declare global {
       respond({ ok: false, error: `Unknown page action "${msg.action}"` });
       return;
     }
+    // Any agent call on this tab (a snapshot counts) means the agent is driving it.
+    if (msg.action !== 'overlay' && msg.action !== 'viewport') overlay.drive();
     void (async () => {
       try {
         const result = await fn(msg.params || {});

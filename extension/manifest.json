@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tabwing",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Your own Chrome for a terminal agent: an offstage tab group, real logins, per-site permission.",
   "minimum_chrome_version": "116",
   "permissions": [

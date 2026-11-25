@@ -116,6 +116,7 @@ export type PageAction =
   | 'links'
   | 'query'
   | 'viewport'
+  | 'overlay'
   | 'ping';
 
 export interface PageParams {
@@ -154,6 +155,12 @@ export interface PageParams {
   noCdp?: boolean;
   /** Absolute path for page.upload. */
   file?: string;
+  /** Driving overlay: 'drive' | 'point' | 'press' | 'hide' | 'show'. */
+  op?: string;
+  /** Overlay target point and box, in viewport CSS pixels. */
+  x?: number;
+  y?: number;
+  box?: { left: number; top: number; width: number; height: number };
 }
 
 export interface Envelope<T = unknown> {

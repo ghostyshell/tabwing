@@ -197,7 +197,56 @@ check "spawned tab joined the group" "page2.html" "$("$CTL" tabs)"
 "$CTL" close --tab "$("$CTL" tabs | awk '/^tab / { id = $2 } /page2.html/ { print id; exit }')" >/dev/null 2>&1
 check "spawned tab closed again" "" "$("$CTL" tabs | grep -c page2.html | sed 's/^0$//')"
 
+say "5b. driving overlay"
+assert_test_browser "before 5b"
+# Pixel (0,0) of a PNG: row 0 has no row above and the pixel nothing to its
+# left, so every PNG filter leaves its first three bytes as the raw RGB.
+corner() {
+  python3 - "$1" <<'PY'
+import struct, sys, zlib
+d = open(sys.argv[1], 'rb').read()
+i, idat = 8, b''
+while i < len(d):
+    n, = struct.unpack('>I', d[i:i + 4])
+    if d[i + 4:i + 8] == b'IDAT':
+        idat += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompressobj().decompress(idat, 16)
+print(','.join(str(b) for b in raw[1:4]))
+PY
+}
+# A background tab runs no CSS transitions, so the glow would never show in a
+# capture there and the screenshot check would prove nothing: watch the tab.
+"$CTL" activate >/dev/null 2>&1
+# White, because captures come back in the display's colour space (Display P3
+# on a Mac) and only greys survive that conversion unchanged.
+"$CTL" eval "document.documentElement.style.background='#fff'; document.body.style.background='#fff'; 'white'" >/dev/null
+"$CTL" click css=#counter >/dev/null
+OUT="$("$CTL" eval "(() => { const h = document.querySelector('tabwing-overlay'); if (!h) return 'no overlay'; const r = document.getElementById('counter').getBoundingClientRect(); const on = Math.abs(+h.dataset.x - (r.left + r.width / 2)) < 3 && Math.abs(+h.dataset.y - (r.top + r.height / 2)) < 3; return 'driving=' + h.dataset.driving + ' cursor-on-target=' + on + ' visible=' + document.visibilityState; })()")"
+check "glow is on while the agent drives" "driving=on" "$OUT"
+check "cursor glided to the clicked element" "cursor-on-target=true" "$OUT"
+check "the overlay checks ran on a watched tab" "visible=visible" "$OUT"
+check "snapshot never lists the overlay" "hits=0" "hits=$("$CTL" snapshot | grep -c tabwing-overlay)"
+sleep 1 # the glow fades in over 350ms
+OUT="$("$CTL" screenshot 2>&1)"
+check "screenshot leaves the overlay out" "255,255,255" "$(corner "$(printf '%s\n' "$OUT" | head -1)")"
+sleep 0.5
+check "overlay is back after the screenshot" "shown" "$("$CTL" eval "document.querySelector('tabwing-overlay').style.display === 'none' ? 'hidden' : 'shown'")"
+# A page that smooth-scrolls (Bootstrap 5 turns it on) must still get the
+# press on the element, not where the element was before the scroll.
+"$CTL" eval "(() => { document.documentElement.style.scrollBehavior = 'smooth'; const s = document.createElement('div'); s.style.height = '2500px'; const b = document.createElement('button'); b.id = 'far'; b.textContent = 'far'; b.onclick = () => { b.textContent = 'far hit'; }; document.body.append(s, b); scrollTo({ top: 0, behavior: 'instant' }); return 'ok'; })()" >/dev/null
+"$CTL" click css=#far >/dev/null
+check "click lands on a smooth-scroll page" "far hit" "$("$CTL" eval "document.getElementById('far').textContent")"
+# The overlay cannot be drawn in an XML document; reading one must still work.
+"$CTL" goto "$ORIGIN/feed.xml" >/dev/null
+check "content actions still work on an XML page" "2 match(es) for item" "$("$CTL" query item 2>&1)"
+"$CTL" goto "$ORIGIN/fixture.html" >/dev/null
+"$CTL" snapshot >/dev/null # section 6 clicks ref 1 of a fresh snapshot
+node "$ROOT/dist/scripts/cdp-ext-eval.js" "$ROOT/extension" "$CDP_PORT" \
+  "chrome.tabs.query({}).then(t=>{const b=t.find(x=>x.url==='about:blank');return b?chrome.tabs.update(b.id,{active:true}).then(()=>'back'):'none'})" >/dev/null
+
 say "6. navigation + ref expiry"
+assert_test_browser "before 6"
 "$CTL" click 1 >/dev/null 2>&1
 "$CTL" wait url=/page2.html --timeout 5000 >/dev/null
 sleep 0.5
